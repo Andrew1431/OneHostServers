@@ -53,6 +53,26 @@ server `mc` ended up in `-b`, not the default `-a`).
 - Pairs naturally with recording the chosen zone per-server on create/stop so
   start can restore into a zone with capacity and remember where it went.
 
+## Retry across zones on capacity exhaustion
+
+GCP returns `ZONE_RESOURCE_POOL_EXHAUSTED` when the configured zone has no
+capacity for the requested machine type (hit on the POC `mc` create in
+`northamerica-northeast2-a`). Today that's a hard failure — the user must
+manually change `GCP_ZONE` / `default_zone` and retry.
+
+- **Sketch:** on create/start, catch `ZONE_RESOURCE_POOL_EXHAUSTED` (and the
+  related `QUOTA_EXCEEDED`/stockout codes) and retry the same request across the
+  other zones in the region (`-a` → `-b` → `-c`) before surfacing an error.
+- **Cheap because** snapshots are global (`provider.ts` restore uses
+  `global/snapshots/...`) and the external IP is ephemeral — nothing is pinned to
+  a zone, so re-placing is just retrying the disk+instance insert elsewhere.
+- **Pairs with** the *Zone auto-discovery* idea below: that records where a server
+  actually landed so subsequent stop/status/destroy find it; this one is the
+  create/start-time fallback that picks a zone with capacity in the first place.
+- **Constraint:** enumerate the region's zones from GCP (`zones list`, filter by
+  region) rather than hardcoding `-a/-b/-c`; demote `GCP_ZONE`/`default_zone` to a
+  *preferred* zone, not a hard requirement.
+
 ## Idle self-teardown — how an instance triggers its own stop
 
 The agent runs ON the game VM and detects idleness (`apps/agent`). The open

@@ -15,6 +15,19 @@ relying on a shortcut — never cut one silently.
 | 7 | ~~Restored instances reuse a hardcoded machine type~~ **RESOLVED** | `@onehost/gcp` | machine + disk type now persisted as snapshot labels and restored on `start` (overridable via flags). Still no full `MachineSpec` in a DB — fine until Firestore lands |
 | 8 | One shared firewall rule opens all game ports for all servers | `infra/main.tf` | per-server firewall scoping (each server opens only its own ports) |
 | 9 | Internal packages run from `src` via tsx; no build step | all packages | bundle (tsup/esbuild) per app for Cloud Run deploy; add TS project references |
+| 10 | `start` has no rollback — a failed instance insert orphans the restored disk | `@onehost/gcp` provider `start` | wrap the two-step restore in compensation: if the instance insert fails (e.g. `ZONE_RESOURCE_POOL_EXHAUSTED`), delete the just-created disk before throwing. Pairs with the cross-zone retry idea (retry the *pair* in the next zone). Until then a failed start leaves a billable unattached disk — see below |
+
+## start partial-failure orphans a disk (#10)
+
+`provider.ts` `start` restores in two steps: (1) `disks.insert` from the snapshot,
+(2) `instances.insert` attaching it (`autoDelete: true`). `autoDelete` only fires
+once the disk is *attached*, so if step 2 fails the step-1 disk is left unattached
+and bills for its full provisioned size (~$0.20/GB-mo for pd-ssd) indefinitely.
+Hit live: a `start`/create exhausted in `northamerica-northeast2-a` left an
+unattached 20 GB `mc` disk there. Fix is a `try`/`catch` around step 2 that
+deletes `diskName(id)` on failure; `create` is unaffected (single atomic insert
+with an inline boot disk). A `cli prune-disks` / status warning for existing
+orphans would also help operators clean up after the fact.
 
 ## No-build internal packages (#9)
 
