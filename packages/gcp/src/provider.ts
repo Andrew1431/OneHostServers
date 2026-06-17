@@ -2,6 +2,7 @@ import {
   InstancesClient,
   DisksClient,
   SnapshotsClient,
+  ZonesClient,
   ZoneOperationsClient,
   GlobalOperationsClient,
   type protos,
@@ -49,6 +50,7 @@ export class GcpServerProvider implements ServerProvider {
   private readonly instances = new InstancesClient();
   private readonly disks = new DisksClient();
   private readonly snapshots = new SnapshotsClient();
+  private readonly zones = new ZonesClient();
   private readonly zoneOps = new ZoneOperationsClient();
   private readonly globalOps = new GlobalOperationsClient();
 
@@ -76,43 +78,47 @@ export class GcpServerProvider implements ServerProvider {
   }
 
   async create(spec: ServerSpec): Promise<RunningServer> {
-    const { projectId, zone } = this.cfg;
+    const { projectId } = this.cfg;
     const name = instanceName(spec.id);
     const machineType = machineTypeName(spec.machine);
     const diskType = spec.machine.diskType;
 
-    const [resp] = await this.instances.insert({
-      project: projectId,
-      zone,
-      instanceResource: {
-        name,
-        machineType: `zones/${zone}/machineTypes/${machineType}`,
-        tags: { items: [this.cfg.networkTag] },
-        labels: {
-          [SERVER_LABEL]: name,
-          [MACHINE_LABEL]: machineType,
-          [DISKTYPE_LABEL]: diskType,
-        },
-        disks: [
-          {
-            boot: true,
-            autoDelete: true,
-            initializeParams: {
-              sourceImage: this.cfg.sourceImage,
-              diskSizeGb: spec.machine.diskGb,
-              diskType: `zones/${zone}/diskTypes/${diskType}`,
-            },
+    // Single atomic insert (inline boot disk) — nothing to clean up on failure,
+    // so capacity exhaustion just moves to the next zone.
+    return this.withZoneFallback(async (zone) => {
+      const [resp] = await this.instances.insert({
+        project: projectId,
+        zone,
+        instanceResource: {
+          name,
+          machineType: `zones/${zone}/machineTypes/${machineType}`,
+          tags: { items: [this.cfg.networkTag] },
+          labels: {
+            [SERVER_LABEL]: name,
+            [MACHINE_LABEL]: machineType,
+            [DISKTYPE_LABEL]: diskType,
           },
-        ],
-        networkInterfaces: this.networkInterface(),
-      },
+          disks: [
+            {
+              boot: true,
+              autoDelete: true,
+              initializeParams: {
+                sourceImage: this.cfg.sourceImage,
+                diskSizeGb: spec.machine.diskGb,
+                diskType: `zones/${zone}/diskTypes/${diskType}`,
+              },
+            },
+          ],
+          networkInterfaces: this.networkInterface(),
+        },
+      });
+      await waitZonal(this.zoneOps, projectId, zone, resp);
+      return { id: spec.id, address: await this.requireAddress(spec.id, zone) };
     });
-    await waitZonal(this.zoneOps, projectId, zone, resp);
-    return { id: spec.id, address: await this.requireAddress(spec.id, zone) };
   }
 
   async start(id: ServerId, opts: StartOptions = {}): Promise<RunningServer> {
-    const { projectId, zone } = this.cfg;
+    const { projectId } = this.cfg;
     const snapshot = await this.latestSnapshotRecord(id);
     if (snapshot === undefined) {
       throw new Error(`No snapshot to restore for server '${id}' — was it ever stopped?`);
@@ -124,45 +130,59 @@ export class GcpServerProvider implements ServerProvider {
     const diskType =
       opts.diskType ?? snapshot.labels[DISKTYPE_LABEL] ?? DEFAULT_DISK_TYPE;
 
-    // 1. Recreate the disk from the snapshot, with the chosen disk type.
-    const [diskResp] = await this.disks.insert({
-      project: projectId,
-      zone,
-      diskResource: {
-        name: diskName(id),
-        sourceSnapshot: `projects/${projectId}/global/snapshots/${snapshot.name}`,
-        type: `zones/${zone}/diskTypes/${diskType}`,
-      },
-    });
-    await waitZonal(this.zoneOps, projectId, zone, diskResp);
-
-    // 2. Boot an instance attached to that disk, re-stamping the sizing labels
-    //    so the next stop/start cycle remembers them.
     const name = instanceName(id);
-    const [instResp] = await this.instances.insert({
-      project: projectId,
-      zone,
-      instanceResource: {
-        name,
-        machineType: `zones/${zone}/machineTypes/${machineType}`,
-        tags: { items: [this.cfg.networkTag] },
-        labels: {
-          [SERVER_LABEL]: name,
-          [MACHINE_LABEL]: machineType,
-          [DISKTYPE_LABEL]: diskType,
-        },
-        disks: [
-          {
-            boot: true,
-            autoDelete: true,
-            source: `projects/${projectId}/zones/${zone}/disks/${diskName(id)}`,
+    // The snapshot is global, so a STOPPED server can restore into any zone with
+    // capacity. Try the preferred zone first, then the rest of the region. Each
+    // attempt is disk-then-instance; on failure we delete the disk we just made
+    // so a retry doesn't collide and a final failure doesn't orphan it.
+    return this.withZoneFallback(async (zone) => {
+      try {
+        // 1. Recreate the disk from the snapshot, with the chosen disk type.
+        const [diskResp] = await this.disks.insert({
+          project: projectId,
+          zone,
+          diskResource: {
+            name: diskName(id),
+            sourceSnapshot: `projects/${projectId}/global/snapshots/${snapshot.name}`,
+            type: `zones/${zone}/diskTypes/${diskType}`,
           },
-        ],
-        networkInterfaces: this.networkInterface(),
-      },
+        });
+        await waitZonal(this.zoneOps, projectId, zone, diskResp);
+
+        // 2. Boot an instance attached to that disk, re-stamping the sizing
+        //    labels so the next stop/start cycle remembers them.
+        const [instResp] = await this.instances.insert({
+          project: projectId,
+          zone,
+          instanceResource: {
+            name,
+            machineType: `zones/${zone}/machineTypes/${machineType}`,
+            tags: { items: [this.cfg.networkTag] },
+            labels: {
+              [SERVER_LABEL]: name,
+              [MACHINE_LABEL]: machineType,
+              [DISKTYPE_LABEL]: diskType,
+            },
+            disks: [
+              {
+                boot: true,
+                autoDelete: true,
+                source: `projects/${projectId}/zones/${zone}/disks/${diskName(id)}`,
+              },
+            ],
+            networkInterfaces: this.networkInterface(),
+          },
+        });
+        await waitZonal(this.zoneOps, projectId, zone, instResp);
+        return { id, address: await this.requireAddress(id, zone) };
+      } catch (err) {
+        // Anything failed after we may have created the disk — it's now attached
+        // to nothing and would bill forever; remove it (no-op if it was never
+        // created) before we retry the next zone or give up.
+        await this.deleteDiskQuietly(id, zone);
+        throw err;
+      }
     });
-    await waitZonal(this.zoneOps, projectId, zone, instResp);
-    return { id, address: await this.requireAddress(id, zone) };
   }
 
   async stop(id: ServerId): Promise<void> {
@@ -293,6 +313,62 @@ export class GcpServerProvider implements ServerProvider {
 
   // --- helpers ---------------------------------------------------------------
 
+  /**
+   * Run a zonal action, falling back through the region's zones when one is out
+   * of capacity. The configured zone is tried first; any non-capacity error
+   * propagates immediately (only `ZONE_RESOURCE_POOL_EXHAUSTED`-style stockouts
+   * are worth retrying elsewhere). The action must clean up its own partial work
+   * before throwing, since the next zone reuses the same resource names.
+   */
+  private async withZoneFallback<T>(action: (zone: string) => Promise<T>): Promise<T> {
+    const zones = await this.orderedZones();
+    let lastErr: unknown;
+    for (const zone of zones) {
+      try {
+        return await action(zone);
+      } catch (err) {
+        if (!isCapacityError(err)) throw err;
+        lastErr = err;
+        console.warn(`zone ${zone} out of capacity; trying the next zone`);
+      }
+    }
+    throw lastErr ?? new Error('no zones available in the region');
+  }
+
+  /** Region's UP zones, configured zone first so it stays the default placement. */
+  private async orderedZones(): Promise<string[]> {
+    const preferred = this.cfg.zone;
+    const { projectId } = this.cfg;
+    const region = this.region;
+    const others: string[] = [];
+    try {
+      const iterable = this.zones.listAsync({ project: projectId, filter: 'status = UP' });
+      for await (const z of iterable) {
+        if (z.name && z.name !== preferred && z.region?.endsWith(`/regions/${region}`)) {
+          others.push(z.name);
+        }
+      }
+    } catch (err) {
+      // If zone discovery fails, still attempt the configured zone.
+      console.warn('zone discovery failed; using only the configured zone:', err);
+    }
+    others.sort();
+    return [preferred, ...others];
+  }
+
+  /** Best-effort disk delete used to compensate a failed start; ignores not-found. */
+  private async deleteDiskQuietly(id: ServerId, zone: string): Promise<void> {
+    const { projectId } = this.cfg;
+    try {
+      const [resp] = await this.disks.delete({ project: projectId, zone, disk: diskName(id) });
+      await waitZonal(this.zoneOps, projectId, zone, resp);
+    } catch (err) {
+      if (!isNotFound(err)) {
+        console.error(`cleanup: could not delete disk ${diskName(id)} in ${zone}:`, err);
+      }
+    }
+  }
+
   private async getInstance(id: ServerId, zone: string) {
     const { projectId } = this.cfg;
     try {
@@ -419,4 +495,14 @@ function extractAddress(
 
 function isNotFound(err: unknown): boolean {
   return typeof err === 'object' && err !== null && 'code' in err && (err as { code: unknown }).code === 5;
+}
+
+/**
+ * A zone stockout — the machine type isn't available in this zone right now, but
+ * may be in another. Worth retrying elsewhere (unlike quota, which is regional/
+ * global and a different zone won't help).
+ */
+function isCapacityError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /RESOURCE_POOL_EXHAUSTED|does not have enough resources|ZONE_RESOURCE_POOL_EXHAUSTED/i.test(msg);
 }

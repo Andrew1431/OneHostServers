@@ -39,39 +39,40 @@ never hand-edit either.
   before overwriting. Needs gcloud + ADC already present; degrade to plain text
   prompts if a list call fails.
 
-## Zone auto-discovery for stop / status / start / destroy
+## Zone auto-discovery for stop / status / start / destroy — DONE
 
-`list` already finds servers in any zone via aggregatedList, but the per-server
-commands still trust the configured `GCP_ZONE` and fail if a server landed
-elsewhere (capacity can place it in a different zone than requested — the POC
-server `mc` ended up in `-b`, not the default `-a`).
+Resolved. `stop`/`status`/`destroy` resolve a server's actual zone via `locate`
+(name-filtered aggregatedList) instead of trusting `GCP_ZONE`, and `list` uses
+aggregatedList directly — so a server that capacity placed in a different zone
+(the POC `mc` landed in `-b`, not the default `-a`) is still found. `create`/`start`
+fall back across the region's zones (`withZoneFallback`), so `GCP_ZONE` is now just
+the *preferred* placement, not a hard requirement. Remaining nice-to-have: see the
+machine-substitution entry above for when *no* zone has the requested type.
 
-- Resolve a server's actual zone from the cloud (instance aggregatedList, or the
-  zone recorded alongside its snapshot) instead of assuming `GCP_ZONE`.
-- That demotes `GCP_ZONE` to just a *default for `create`* — every other command
-  becomes zone-agnostic, removing a whole class of "server not found" confusion.
-- Pairs naturally with recording the chosen zone per-server on create/stop so
-  start can restore into a zone with capacity and remember where it went.
+## Substitute a similar machine type when a zone is out of capacity — NOT YET BUILT
 
-## Retry across zones on capacity exhaustion
+`ZONE_RESOURCE_POOL_EXHAUSTED` now triggers a cross-zone retry (`withZoneFallback`),
+but if *every* zone is out of the requested type, it still fails. Since the boot
+disk is machine-agnostic, we could instead boot onto a *comparable* type that does
+have stock — operational cost is low enough that a slightly different machine beats
+"can't start".
 
-GCP returns `ZONE_RESOURCE_POOL_EXHAUSTED` when the configured zone has no
-capacity for the requested machine type (hit on the POC `mc` create in
-`northamerica-northeast2-a`). Today that's a hard failure — the user must
-manually change `GCP_ZONE` / `default_zone` and retry.
-
-- **Sketch:** on create/start, catch `ZONE_RESOURCE_POOL_EXHAUSTED` (and the
-  related `QUOTA_EXCEEDED`/stockout codes) and retry the same request across the
-  other zones in the region (`-a` → `-b` → `-c`) before surfacing an error.
-- **Cheap because** snapshots are global (`provider.ts` restore uses
-  `global/snapshots/...`) and the external IP is ephemeral — nothing is pinned to
-  a zone, so re-placing is just retrying the disk+instance insert elsewhere.
-- **Pairs with** the *Zone auto-discovery* idea below: that records where a server
-  actually landed so subsequent stop/status/destroy find it; this one is the
-  create/start-time fallback that picks a zone with capacity in the first place.
-- **Constraint:** enumerate the region's zones from GCP (`zones list`, filter by
-  region) rather than hardcoding `-a/-b/-c`; demote `GCP_ZONE`/`default_zone` to a
-  *preferred* zone, not a hard requirement.
+- **Mechanics are nearly free:** `catalog.ts` `listMachineTypes(zone)` reads what a
+  zone offers, and `start` already accepts a `machineType` override. So substitution
+  is just choosing a different type to pass.
+- **Hard part #1 — capacity is unobservable:** `listMachineTypes` returns what's
+  *catalogued*, not what has stock right now; you only learn by attempting the
+  insert. So this turns the current 1-D zone search into a 2-D (zone × type) search,
+  each miss costing an insert→wait→rollback. Must be **bounded** to a short curated
+  ladder, not "try everything".
+- **Hard part #2 — "similar" needs a policy:** comparable vCPU/RAM within a tolerance
+  plus a family preference (prefer same-or-faster cores: e2 → n2 → c2; core *speed*
+  matters more than count for game servers). Custom types (`e2-custom-V-M`) widen the
+  fallback space.
+- **Hard part #3 — transient vs persisted:** `start` re-stamps the chosen type onto
+  the snapshot labels, so a substitute would silently become the server's permanent
+  spec. Prefer transient substitution (or at least notify the user it happened).
+- **Layering:** keep zone fallback first; add the type ladder *within* each zone.
 
 ## Idle self-teardown — how an instance triggers its own stop
 
