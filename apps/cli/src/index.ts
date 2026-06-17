@@ -3,6 +3,7 @@ import type { ServerSpec, MachineSpec, ServerSummary } from '@onehost/core';
 import type { StartOptions } from '@onehost/provider-api';
 import { GcpServerProvider } from '@onehost/gcp';
 import { loadGcpConfig, writeConfig, envFilePath } from './config.ts';
+import { createInteractively } from './interactive.ts';
 
 /**
  * Bare-bones CLI to drive the GCP provider directly — your hands-on GCP surface
@@ -20,10 +21,18 @@ async function main(): Promise<void> {
   if (!command || command === 'help') return usage();
   if (command === 'config') return runConfig(args.slice(1));
 
-  const provider = new GcpServerProvider(loadGcpConfig());
+  const cfg = loadGcpConfig();
+  const provider = new GcpServerProvider(cfg);
 
   switch (command) {
     case 'create': {
+      // Interactive when run in a TTY with no sizing flags, or forced with -i.
+      const force = rest.includes('-i') || rest.includes('--interactive');
+      const sizingFlags = rest.filter((a) => a !== '-i' && a !== '--interactive');
+      if (process.stdin.isTTY && (force || sizingFlags.length === 0)) {
+        await createInteractively(provider, { id, cfg });
+        break;
+      }
       if (!id) return fail('create needs a server id');
       const spec = buildSpec(id, parseFlags(rest));
       const running = await provider.create(spec);
@@ -189,8 +198,10 @@ function usage(): void {
     [
       'onehost <command> <server-id> [flags]',
       '',
-      '  create <id> [--vcpus 2] [--memory 4096] [--disk 20]',
+      '  create [<id>]                                                # interactive picker (TTY)',
+      '  create <id> [--vcpus 2] [--memory 4096] [--disk 20]         # non-interactive',
       '              [--disk-type pd-balanced] [--machine n2-standard-4] [--port tcp:25565]',
+      '              [-i|--interactive]                               # force the picker',
       '  start <id>  [--disk-type pd-ssd] [--machine c2-standard-4]   # override to upgrade',
       '  stop <id>',
       '  status <id>',

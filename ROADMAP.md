@@ -24,9 +24,15 @@ order of what to build next.
 
 ## Later
 
-- [ ] **Interactive `create`** — pick machine/disk from live GCP lists (e.g.
-  `@clack/prompts`) instead of remembering flag syntax. Pairs with the resize
-  picker in IDEAS.md entry 1.
+- [x] **Interactive `create`** — `create` with no sizing flags (or `-i`) in a TTY
+  launches a `@clack/prompts` picker: gaming power-tier machine families (`e2` →
+  `c4`) from the zone's live `machineTypes`/`diskTypes`, each annotated with an
+  on-demand hourly cost estimate, then a confirm + provision. Custom sizing
+  (`<family>-custom-V-M`) offered for e2/n2/n2d; shared-core types filtered out.
+  Cost comes from a static per-family rate table sourced from the Billing Catalog
+  for `northamerica-northeast2` (`packages/gcp/src/pricing.ts`) — region-specific,
+  flagged as approximate elsewhere. (`apps/cli/src/interactive.ts`,
+  `packages/gcp/src/catalog.ts`). Pairs with the resize picker in IDEAS.md entry 1.
 - [ ] **`cli init` first-run bootstrap** — generate `terraform.tfvars` + `.env`
   interactively from `gcloud projects/regions`. (IDEAS.md entry 2)
 - [ ] **Discord bot** — the real product UX; full TUI dashboard is optional polish.
