@@ -174,18 +174,32 @@ After that it's all Discord, in your locked channel:
 
 ## Updating
 
-After changing app/package code, rebuild (step 3), then roll the affected service
-to a new revision (Cloud Run pins a digest, so a fresh `:latest` needs a new
-revision):
+What you touched decides what you run:
+
+| You changed… | Run |
+|---|---|
+| **App/package code** (`apps/worker`, `apps/interactions`, or a package they import — e.g. `@onehost/core`) | `pnpm run deploy` |
+| **Slash command shape** (`apps/interactions/src/register.ts`) | `pnpm --filter @onehost/interactions register` |
+| **Terraform only** (env vars, IAM, ports, `default_zone`) | `terraform apply` |
+| **CLI code** (`apps/cli`, or a package it imports) | nothing to deploy — the CLI runs from source via `tsx` |
+
+`pnpm run deploy` reads your project + zone from `.env`, builds both images in the
+cloud, and rolls the Cloud Run services — no `$REGION`/`$PROJECT` to set. (Use
+`run` — a bare `pnpm deploy` triggers pnpm's own built-in command instead.)
 
 ```bash
-gcloud run deploy onehost-worker \
-  --image $REGION-docker.pkg.dev/$PROJECT/onehost/worker:latest --region $REGION
-gcloud run deploy onehost-interactions \
-  --image $REGION-docker.pkg.dev/$PROJECT/onehost/interactions:latest --region $REGION
+pnpm run deploy                 # build + redeploy both services
+pnpm run deploy worker          # only the worker (or: interactions)
+pnpm run deploy --skip-build    # already built — just roll the latest image
 ```
 
-Changing only Terraform (env vars, IAM, ports) is just `terraform apply`.
+(Cloud Run pins an image digest, so a fresh `:latest` needs a new revision; the
+deploy rolls it for you.) Only the service whose code changed needs a redeploy —
+but a shared package (`@onehost/core`, `@onehost/jobs`) touches both, so plain
+`pnpm deploy` is the safe default. CLI and the deployed apps share one provider
+(`@onehost/gcp`) and one renderer (`@onehost/core` `viewServer`), so a logic or
+formatting change lands everywhere from a single edit — deploying only ships it
+to Cloud Run.
 
 ## Local dev (no GCP control plane)
 

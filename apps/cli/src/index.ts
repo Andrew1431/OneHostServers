@@ -1,5 +1,6 @@
 #!/usr/bin/env tsx
 import type { ServerSpec, MachineSpec, ServerSummary } from '@onehost/core';
+import { viewServer } from '@onehost/core';
 import type { StartOptions } from '@onehost/provider-api';
 import { GcpServerProvider } from '@onehost/gcp';
 import { loadGcpConfig, writeConfig, envFilePath } from './config.ts';
@@ -176,14 +177,17 @@ function printServers(servers: ServerSummary[]): void {
     console.log('No servers. `create <id>` to make one.');
     return;
   }
-  const rows = servers.map((s) => ({
-    ID: s.id,
-    STATE: s.state,
-    ZONE: s.zone ?? '-',
-    ADDRESS: s.address ?? '-',
-    MACHINE: s.machineType ?? '-',
-    DISK: s.diskType ?? '-',
-  }));
+  const rows = servers.map((s) => {
+    const v = viewServer(s);
+    return {
+      ID: v.id,
+      STATE: v.state,
+      ZONE: v.zone,
+      ADDRESS: v.address,
+      MACHINE: v.machine,
+      DISK: v.disk,
+    };
+  });
   const cols = Object.keys(rows[0]!) as Array<keyof (typeof rows)[number]>;
   const width = (c: keyof (typeof rows)[number]) =>
     Math.max(c.length, ...rows.map((r) => r[c].length));

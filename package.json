@@ -9,7 +9,8 @@
   "scripts": {
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
-    "cli": "pnpm --filter @onehost/cli start"
+    "cli": "pnpm --filter @onehost/cli start",
+    "deploy": "node scripts/deploy.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
