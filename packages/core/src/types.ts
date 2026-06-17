@@ -62,3 +62,16 @@ export interface RunningServer {
   id: ServerId;
   address: string;
 }
+
+/** One row in a `list` view: a server's reality across all zones, no DB needed. */
+export interface ServerSummary {
+  id: ServerId;
+  state: ServerState;
+  /** Zone the live instance sits in; undefined when STOPPED (no instance). */
+  zone?: string;
+  /** Public address when RUNNING. */
+  address?: string;
+  /** Sizing remembered on the instance or its latest snapshot, if known. */
+  machineType?: string;
+  diskType?: string;
+}

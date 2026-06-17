@@ -2,6 +2,7 @@ import type {
   ServerId,
   ServerSpec,
   ServerStatus,
+  ServerSummary,
   RunningServer,
 } from '@onehost/core';
 
@@ -38,6 +39,13 @@ export interface ServerProvider {
 
   /** Best-effort current status from the cloud (source of truth is the provider). */
   status(id: ServerId): Promise<ServerStatus>;
+
+  /**
+   * Every server this deployment knows about, across all zones — live instances
+   * plus STOPPED servers that exist only as snapshots. The cloud is the source
+   * of truth, so this needs no database.
+   */
+  list(): Promise<ServerSummary[]>;
 }
 
 export class ServerNotFoundError extends Error {

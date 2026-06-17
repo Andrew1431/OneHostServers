@@ -11,6 +11,7 @@ import type {
   ServerSpec,
   ServerStatus,
   ServerState,
+  ServerSummary,
   RunningServer,
 } from '@onehost/core';
 import {
@@ -226,6 +227,56 @@ export class GcpServerProvider implements ServerProvider {
     const state = mapInstanceStatus(instance.status ?? undefined);
     const address = extractAddress(instance);
     return address === undefined ? { state } : { state, address };
+  }
+
+  async list(): Promise<ServerSummary[]> {
+    const { projectId } = this.cfg;
+    const summaries = new Map<ServerId, ServerSummary>();
+
+    // 1. Live instances across every zone — no need to know the zone up front,
+    //    which is also how we discover where a server actually landed.
+    const aggregated = this.instances.aggregatedListAsync({ project: projectId });
+    for await (const [scope, scoped] of aggregated) {
+      for (const inst of scoped.instances ?? []) {
+        const id = inst.labels?.[SERVER_LABEL];
+        if (!id) continue; // not a OneHost instance
+        const address = extractAddress(inst);
+        const machineType = inst.labels?.[MACHINE_LABEL];
+        const diskType = inst.labels?.[DISKTYPE_LABEL];
+        summaries.set(id, {
+          id,
+          state: mapInstanceStatus(inst.status ?? undefined),
+          zone: scope.replace(/^zones\//, ''),
+          ...(address ? { address } : {}),
+          ...(machineType ? { machineType } : {}),
+          ...(diskType ? { diskType } : {}),
+        });
+      }
+    }
+
+    // 2. STOPPED servers: those with snapshots but no live instance. Keep the
+    //    newest snapshot's labels so the listed sizing matches what `start` restores.
+    const stopped = new Map<ServerId, { labels: Record<string, string>; ts: string }>();
+    const snaps = this.snapshots.listAsync({ project: projectId });
+    for await (const snap of snaps) {
+      const id = snap.labels?.[SERVER_LABEL];
+      if (!id || summaries.has(id)) continue;
+      const ts = snap.creationTimestamp ?? '';
+      const cur = stopped.get(id);
+      if (cur === undefined || ts > cur.ts) stopped.set(id, { labels: snap.labels ?? {}, ts });
+    }
+    for (const [id, { labels }] of stopped) {
+      const machineType = labels[MACHINE_LABEL];
+      const diskType = labels[DISKTYPE_LABEL];
+      summaries.set(id, {
+        id,
+        state: 'STOPPED',
+        ...(machineType ? { machineType } : {}),
+        ...(diskType ? { diskType } : {}),
+      });
+    }
+
+    return [...summaries.values()].sort((a, b) => a.id.localeCompare(b.id));
   }
 
   // --- helpers ---------------------------------------------------------------

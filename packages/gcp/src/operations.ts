@@ -16,18 +16,30 @@ import type {
 // Mutation calls resolve to `[response]` where `response.latestResponse` is the
 // Operation message. We only need name/status/error; `status` is a proto enum
 // union (not plain string), so we keep the shape minimal and unknown-typed.
+// `error` is typed `unknown` here: the proto's IOperation.error type doesn't
+// expose the `.errors[]` array that Compute actually populates at runtime, so we
+// narrow structurally in throwIfFailed instead of fighting the generated types.
 interface OpLike {
   name?: string | null | undefined;
   status?: unknown;
-  error?: { errors?: Array<{ code?: string | null; message?: string | null }> | null } | null;
+  error?: unknown;
 }
 interface OpResponse {
   latestResponse: OpLike;
 }
 
+interface OpErrorItem {
+  code?: string | null;
+  message?: string | null;
+}
+
 function throwIfFailed(operation: OpLike): void {
-  const errors = operation.error?.errors;
-  if (errors && errors.length > 0) {
+  const err = operation.error;
+  const errors =
+    typeof err === 'object' && err !== null && 'errors' in err
+      ? ((err as { errors?: OpErrorItem[] | null }).errors ?? [])
+      : [];
+  if (errors.length > 0) {
     const detail = errors.map((e) => `${e.code ?? 'ERROR'}: ${e.message ?? ''}`).join('; ');
     throw new Error(`GCP operation failed — ${detail}`);
   }

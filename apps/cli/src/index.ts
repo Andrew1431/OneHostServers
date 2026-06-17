@@ -1,8 +1,8 @@
 #!/usr/bin/env tsx
-import type { ServerSpec, MachineSpec } from '@onehost/core';
+import type { ServerSpec, MachineSpec, ServerSummary } from '@onehost/core';
 import type { StartOptions } from '@onehost/provider-api';
 import { GcpServerProvider } from '@onehost/gcp';
-import { loadGcpConfig } from './config.ts';
+import { loadGcpConfig, writeConfig, envFilePath } from './config.ts';
 
 /**
  * Bare-bones CLI to drive the GCP provider directly — your hands-on GCP surface
@@ -15,8 +15,10 @@ import { loadGcpConfig } from './config.ts';
  *   pnpm cli destroy <id>
  */
 async function main(): Promise<void> {
-  const [command, id, ...rest] = process.argv.slice(2);
+  const args = process.argv.slice(2);
+  const [command, id, ...rest] = args;
   if (!command || command === 'help') return usage();
+  if (command === 'config') return runConfig(args.slice(1));
 
   const provider = new GcpServerProvider(loadGcpConfig());
 
@@ -39,6 +41,10 @@ async function main(): Promise<void> {
       if (!id) return fail('stop needs a server id');
       await provider.stop(id);
       console.log(`✅ stopped '${id}' — snapshot saved, instance + disk deleted`);
+      break;
+    }
+    case 'list': {
+      printServers(await provider.list());
       break;
     }
     case 'status': {
@@ -134,6 +140,47 @@ function buildSpec(id: string, flags: Flags): ServerSpec {
   };
 }
 
+/** `config --project <id> [--zone <zone>]` — persist to the repo-root `.env`. */
+function runConfig(args: string[]): void {
+  const updates: Record<string, string> = {};
+  for (let i = 0; i < args.length; i += 2) {
+    const key = args[i];
+    const value = args[i + 1];
+    if (value === undefined) break;
+    if (key === '--project') updates.GCP_PROJECT_ID = value;
+    else if (key === '--zone') updates.GCP_ZONE = value;
+    else return fail(`unknown config flag: ${key}`);
+  }
+  if (Object.keys(updates).length === 0) {
+    return fail('config needs --project <id> and/or --zone <zone>');
+  }
+  const path = writeConfig(updates);
+  console.log(`✅ saved to ${path}`);
+  for (const [k, v] of Object.entries(updates)) console.log(`   ${k}=${v}`);
+}
+
+function printServers(servers: ServerSummary[]): void {
+  if (servers.length === 0) {
+    console.log('No servers. `create <id>` to make one.');
+    return;
+  }
+  const rows = servers.map((s) => ({
+    ID: s.id,
+    STATE: s.state,
+    ZONE: s.zone ?? '-',
+    ADDRESS: s.address ?? '-',
+    MACHINE: s.machineType ?? '-',
+    DISK: s.diskType ?? '-',
+  }));
+  const cols = Object.keys(rows[0]!) as Array<keyof (typeof rows)[number]>;
+  const width = (c: keyof (typeof rows)[number]) =>
+    Math.max(c.length, ...rows.map((r) => r[c].length));
+  const line = (r: Record<string, string>) =>
+    cols.map((c) => r[c]!.padEnd(width(c))).join('  ');
+  console.log(line(Object.fromEntries(cols.map((c) => [c, c]))));
+  for (const r of rows) console.log(line(r));
+}
+
 function usage(): void {
   console.log(
     [
@@ -144,12 +191,15 @@ function usage(): void {
       '  start <id>  [--disk-type pd-ssd] [--machine c2-standard-4]   # override to upgrade',
       '  stop <id>',
       '  status <id>',
+      '  list                                                         # all servers, all zones',
       '  destroy <id>',
+      '  config --project <id> [--zone <zone>]                        # save to .env once',
       '',
       '  --machine overrides --vcpus/--memory (pick a faster-core family than e2)',
       '  disk types: pd-standard (HDD) | pd-balanced (SSD) | pd-ssd (fast SSD)',
       '',
-      'env: GCP_PROJECT_ID (required), GCP_ZONE (default us-central1-a)',
+      'config: GCP_PROJECT_ID (required), GCP_ZONE (default us-central1-a) —',
+      '        read from env or the repo-root .env (run `config` to write it).',
     ].join('\n'),
   );
 }
