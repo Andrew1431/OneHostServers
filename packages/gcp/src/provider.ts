@@ -13,8 +13,19 @@ import type {
   ServerState,
   RunningServer,
 } from '@onehost/core';
-import { type ServerProvider, ServerNotFoundError } from '@onehost/provider-api';
-import { SERVER_LABEL, type GcpConfig } from './config.ts';
+import {
+  type ServerProvider,
+  type StartOptions,
+  ServerNotFoundError,
+} from '@onehost/provider-api';
+import {
+  SERVER_LABEL,
+  MACHINE_LABEL,
+  DISKTYPE_LABEL,
+  DEFAULT_DISK_TYPE,
+  DEFAULT_MACHINE_TYPE,
+  type GcpConfig,
+} from './config.ts';
 import {
   instanceName,
   diskName,
@@ -41,18 +52,45 @@ export class GcpServerProvider implements ServerProvider {
 
   constructor(private readonly cfg: GcpConfig) {}
 
+  /** Region derived from the zone, e.g. "northamerica-northeast2-a" -> "...northeast2". */
+  private get region(): string {
+    return this.cfg.zone.replace(/-[a-z]$/, '');
+  }
+
+  /**
+   * Attach instances to OUR VPC (not the project's `default` network) so the
+   * Terraform firewall rules — which target this network + the `onehost` tag —
+   * actually apply. An ephemeral external IP is added for reachability.
+   */
+  private networkInterface() {
+    const { projectId } = this.cfg;
+    return [
+      {
+        network: `projects/${projectId}/global/networks/onehost`,
+        subnetwork: `projects/${projectId}/regions/${this.region}/subnetworks/onehost`,
+        accessConfigs: [{ name: 'External NAT', type: 'ONE_TO_ONE_NAT' }],
+      },
+    ];
+  }
+
   async create(spec: ServerSpec): Promise<RunningServer> {
     const { projectId, zone } = this.cfg;
     const name = instanceName(spec.id);
+    const machineType = machineTypeName(spec.machine);
+    const diskType = spec.machine.diskType;
 
     const [resp] = await this.instances.insert({
       project: projectId,
       zone,
       instanceResource: {
         name,
-        machineType: `zones/${zone}/machineTypes/${machineTypeName(spec.machine)}`,
+        machineType: `zones/${zone}/machineTypes/${machineType}`,
         tags: { items: [this.cfg.networkTag] },
-        labels: { [SERVER_LABEL]: name },
+        labels: {
+          [SERVER_LABEL]: name,
+          [MACHINE_LABEL]: machineType,
+          [DISKTYPE_LABEL]: diskType,
+        },
         disks: [
           {
             boot: true,
@@ -60,49 +98,57 @@ export class GcpServerProvider implements ServerProvider {
             initializeParams: {
               sourceImage: this.cfg.sourceImage,
               diskSizeGb: spec.machine.diskGb,
+              diskType: `zones/${zone}/diskTypes/${diskType}`,
             },
           },
         ],
-        networkInterfaces: [
-          { accessConfigs: [{ name: 'External NAT', type: 'ONE_TO_ONE_NAT' }] },
-        ],
+        networkInterfaces: this.networkInterface(),
       },
     });
     await waitZonal(this.zoneOps, projectId, zone, resp);
     return { id: spec.id, address: await this.requireAddress(spec.id) };
   }
 
-  async start(id: ServerId): Promise<RunningServer> {
+  async start(id: ServerId, opts: StartOptions = {}): Promise<RunningServer> {
     const { projectId, zone } = this.cfg;
-    const snapshot = await this.latestSnapshot(id);
+    const snapshot = await this.latestSnapshotRecord(id);
     if (snapshot === undefined) {
       throw new Error(`No snapshot to restore for server '${id}' — was it ever stopped?`);
     }
 
-    // 1. Recreate the disk from the latest snapshot.
+    // Resolve sizing: explicit override > what the snapshot remembers > defaults.
+    const machineType =
+      opts.machineType ?? snapshot.labels[MACHINE_LABEL] ?? DEFAULT_MACHINE_TYPE;
+    const diskType =
+      opts.diskType ?? snapshot.labels[DISKTYPE_LABEL] ?? DEFAULT_DISK_TYPE;
+
+    // 1. Recreate the disk from the snapshot, with the chosen disk type.
     const [diskResp] = await this.disks.insert({
       project: projectId,
       zone,
       diskResource: {
         name: diskName(id),
-        sourceSnapshot: `projects/${projectId}/global/snapshots/${snapshot}`,
+        sourceSnapshot: `projects/${projectId}/global/snapshots/${snapshot.name}`,
+        type: `zones/${zone}/diskTypes/${diskType}`,
       },
     });
     await waitZonal(this.zoneOps, projectId, zone, diskResp);
 
-    // 2. Boot an instance attached to that disk.
+    // 2. Boot an instance attached to that disk, re-stamping the sizing labels
+    //    so the next stop/start cycle remembers them.
     const name = instanceName(id);
     const [instResp] = await this.instances.insert({
       project: projectId,
       zone,
       instanceResource: {
         name,
-        // Machine type is re-derived from the snapshot's source spec in a later
-        // pass; for now restored instances reuse the create-time default size.
-        // SHORTCUTS.md (#7): persist MachineSpec alongside the server record.
-        machineType: `zones/${zone}/machineTypes/e2-custom-2-4096`,
+        machineType: `zones/${zone}/machineTypes/${machineType}`,
         tags: { items: [this.cfg.networkTag] },
-        labels: { [SERVER_LABEL]: name },
+        labels: {
+          [SERVER_LABEL]: name,
+          [MACHINE_LABEL]: machineType,
+          [DISKTYPE_LABEL]: diskType,
+        },
         disks: [
           {
             boot: true,
@@ -110,9 +156,7 @@ export class GcpServerProvider implements ServerProvider {
             source: `projects/${projectId}/zones/${zone}/disks/${diskName(id)}`,
           },
         ],
-        networkInterfaces: [
-          { accessConfigs: [{ name: 'External NAT', type: 'ONE_TO_ONE_NAT' }] },
-        ],
+        networkInterfaces: this.networkInterface(),
       },
     });
     await waitZonal(this.zoneOps, projectId, zone, instResp);
@@ -123,6 +167,16 @@ export class GcpServerProvider implements ServerProvider {
     const { projectId, zone } = this.cfg;
     const name = instanceName(id);
 
+    // Carry the instance's sizing forward so `start` can restore it (or it can
+    // be overridden). Older instances may lack these labels — that's fine, the
+    // restore falls back to defaults.
+    const instance = await this.getInstance(id);
+    const sizing: Record<string, string> = { [SERVER_LABEL]: name };
+    const machineLabel = instance?.labels?.[MACHINE_LABEL];
+    const diskLabel = instance?.labels?.[DISKTYPE_LABEL];
+    if (machineLabel) sizing[MACHINE_LABEL] = machineLabel;
+    if (diskLabel) sizing[DISKTYPE_LABEL] = diskLabel;
+
     // 1. Snapshot the boot disk (labelled so we can find it on next start).
     const [snapResp] = await this.disks.createSnapshot({
       project: projectId,
@@ -130,7 +184,7 @@ export class GcpServerProvider implements ServerProvider {
       disk: diskName(id),
       snapshotResource: {
         name: snapshotName(id),
-        labels: { [SERVER_LABEL]: name },
+        labels: sizing,
       },
     });
     await waitZonal(this.zoneOps, projectId, zone, snapResp);
@@ -166,8 +220,8 @@ export class GcpServerProvider implements ServerProvider {
   async status(id: ServerId): Promise<ServerStatus> {
     const instance = await this.getInstance(id);
     if (instance === undefined) {
-      const hasSnapshot = (await this.latestSnapshot(id)) !== undefined;
-      return { state: hasSnapshot ? 'STOPPED' : 'STOPPED' };
+      // No instance => stopped (snapshot may or may not exist; either way STOPPED).
+      return { state: 'STOPPED' };
     }
     const state = mapInstanceStatus(instance.status ?? undefined);
     const address = extractAddress(instance);
@@ -216,11 +270,13 @@ export class GcpServerProvider implements ServerProvider {
     return names;
   }
 
-  /** Newest snapshot for a server by creation timestamp, if any. */
-  private async latestSnapshot(id: ServerId): Promise<string | undefined> {
+  /** Newest snapshot for a server (with its sizing labels), if any. */
+  private async latestSnapshotRecord(
+    id: ServerId,
+  ): Promise<{ name: string; labels: Record<string, string> } | undefined> {
     const { projectId } = this.cfg;
     const name = instanceName(id);
-    let latest: { name: string; ts: string } | undefined;
+    let latest: { name: string; labels: Record<string, string>; ts: string } | undefined;
     const iterable = this.snapshots.listAsync({
       project: projectId,
       filter: `labels.${SERVER_LABEL}=${name}`,
@@ -228,9 +284,11 @@ export class GcpServerProvider implements ServerProvider {
     for await (const snap of iterable) {
       if (!snap.name) continue;
       const ts = snap.creationTimestamp ?? '';
-      if (latest === undefined || ts > latest.ts) latest = { name: snap.name, ts };
+      if (latest === undefined || ts > latest.ts) {
+        latest = { name: snap.name, labels: snap.labels ?? {}, ts };
+      }
     }
-    return latest?.name;
+    return latest === undefined ? undefined : { name: latest.name, labels: latest.labels };
   }
 }
 

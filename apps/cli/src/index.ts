@@ -1,5 +1,6 @@
 #!/usr/bin/env tsx
-import type { ServerSpec } from '@onehost/core';
+import type { ServerSpec, MachineSpec } from '@onehost/core';
+import type { StartOptions } from '@onehost/provider-api';
 import { GcpServerProvider } from '@onehost/gcp';
 import { loadGcpConfig } from './config.ts';
 
@@ -30,7 +31,7 @@ async function main(): Promise<void> {
     }
     case 'start': {
       if (!id) return fail('start needs a server id');
-      const running = await provider.start(id);
+      const running = await provider.start(id, parseStartOpts(rest));
       console.log(`✅ started '${id}' — reachable at ${running.address}`);
       break;
     }
@@ -61,11 +62,13 @@ interface Flags {
   vcpus: number;
   memory: number;
   disk: number;
+  diskType: string;
+  machine?: string;
   ports: ServerSpec['ports'];
 }
 
 function parseFlags(args: string[]): Flags {
-  const flags: Flags = { vcpus: 2, memory: 4096, disk: 20, ports: [] };
+  const flags: Flags = { vcpus: 2, memory: 4096, disk: 20, diskType: 'pd-balanced', ports: [] };
   for (let i = 0; i < args.length; i += 2) {
     const key = args[i];
     const value = args[i + 1];
@@ -80,6 +83,12 @@ function parseFlags(args: string[]): Flags {
       case '--disk':
         flags.disk = Number(value);
         break;
+      case '--disk-type':
+        flags.diskType = value;
+        break;
+      case '--machine':
+        flags.machine = value;
+        break;
       case '--port': {
         const [protocol, port] = value.split(':');
         if (protocol !== 'tcp' && protocol !== 'udp') return fail(`bad --port: ${value}`);
@@ -93,12 +102,34 @@ function parseFlags(args: string[]): Flags {
   return flags;
 }
 
+/** Only includes overrides the user explicitly passed, so a plain `start`
+ *  preserves whatever the snapshot remembers. */
+function parseStartOpts(args: string[]): StartOptions {
+  const opts: StartOptions = {};
+  for (let i = 0; i < args.length; i += 2) {
+    const key = args[i];
+    const value = args[i + 1];
+    if (value === undefined) break;
+    if (key === '--machine') opts.machineType = value;
+    else if (key === '--disk-type') opts.diskType = value;
+    else return fail(`unknown flag: ${key}`);
+  }
+  return opts;
+}
+
 function buildSpec(id: string, flags: Flags): ServerSpec {
+  const machine: MachineSpec = {
+    vcpus: flags.vcpus,
+    memoryMb: flags.memory,
+    diskGb: flags.disk,
+    diskType: flags.diskType,
+    ...(flags.machine ? { type: flags.machine } : {}),
+  };
   return {
     id,
     ownerDiscordId: 'cli',
     region: process.env.GCP_ZONE?.replace(/-[a-z]$/, '') ?? 'us-central1',
-    machine: { vcpus: flags.vcpus, memoryMb: flags.memory, diskGb: flags.disk },
+    machine,
     ports: flags.ports,
   };
 }
@@ -108,11 +139,15 @@ function usage(): void {
     [
       'onehost <command> <server-id> [flags]',
       '',
-      '  create <id> [--vcpus 2] [--memory 4096] [--disk 20] [--port tcp:25565]',
-      '  start <id>',
+      '  create <id> [--vcpus 2] [--memory 4096] [--disk 20]',
+      '              [--disk-type pd-balanced] [--machine n2-standard-4] [--port tcp:25565]',
+      '  start <id>  [--disk-type pd-ssd] [--machine c2-standard-4]   # override to upgrade',
       '  stop <id>',
       '  status <id>',
       '  destroy <id>',
+      '',
+      '  --machine overrides --vcpus/--memory (pick a faster-core family than e2)',
+      '  disk types: pd-standard (HDD) | pd-balanced (SSD) | pd-ssd (fast SSD)',
       '',
       'env: GCP_PROJECT_ID (required), GCP_ZONE (default us-central1-a)',
     ].join('\n'),

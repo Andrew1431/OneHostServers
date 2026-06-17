@@ -29,10 +29,11 @@ export function snapshotName(id: ServerId, at: number = Date.now()): string {
 }
 
 /**
- * Build the GCP custom machine type string. GCP validates the exact vcpu/memory
- * combos (memory must be a multiple of 256MB and within per-vcpu bounds); we let
- * the API reject invalid specs rather than re-implement its rules here.
+ * Resolve the GCP machine type. An explicit `machine.type` (e.g. "n2-standard-4")
+ * wins; otherwise we build a custom e2 from vcpus/memory. GCP validates the exact
+ * vcpu/memory combos, so we let the API reject invalid specs rather than
+ * re-implement its rules here.
  */
 export function machineTypeName(machine: MachineSpec): string {
-  return `e2-custom-${machine.vcpus}-${machine.memoryMb}`;
+  return machine.type ?? `e2-custom-${machine.vcpus}-${machine.memoryMb}`;
 }

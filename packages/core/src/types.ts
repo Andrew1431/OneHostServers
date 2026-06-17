@@ -12,11 +12,19 @@ export type ServerState =
   | 'STOPPING' // snapshotting disk, then deleting instance + disk
   | 'ERROR'; // a transition failed; needs inspection/reset
 
-/** Maps directly onto a GCP custom machine type (e2-custom-VCPUS-MEMORYMB). */
+/** Compute + disk sizing for a server. */
 export interface MachineSpec {
   vcpus: number;
   memoryMb: number;
   diskGb: number;
+  /** GCP disk type: pd-standard | pd-balanced | pd-ssd. */
+  diskType: string;
+  /**
+   * Full GCP machine type (e.g. "n2-standard-4", "c2-standard-8"). If unset,
+   * derived as `e2-custom-VCPUS-MEMORYMB`. Use this to pick a faster-core family
+   * than e2 — which matters more than core count for Minecraft.
+   */
+  type?: string;
 }
 
 export type IpProtocol = 'tcp' | 'udp';

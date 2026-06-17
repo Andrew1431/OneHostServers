@@ -13,12 +13,22 @@ import type {
  * Implementations must be idempotent-friendly: callers may retry on failure.
  * See docs/SHORTCUTS.md (#5) — full idempotency keys are a future refactor.
  */
+/**
+ * One-off overrides when starting. If omitted, the provider restores the
+ * machine + disk type recorded on the latest snapshot. Setting these *changes*
+ * the server going forward (e.g. upgrade onto SSD or a faster-core machine).
+ */
+export interface StartOptions {
+  machineType?: string;
+  diskType?: string;
+}
+
 export interface ServerProvider {
   /** First-time provision: fresh disk from a base image + boot. */
   create(spec: ServerSpec): Promise<RunningServer>;
 
   /** Restore the latest snapshot into a disk and boot an instance. */
-  start(id: ServerId): Promise<RunningServer>;
+  start(id: ServerId, opts?: StartOptions): Promise<RunningServer>;
 
   /** Snapshot the disk, then delete the instance + disk. Idle cost -> snapshots only. */
   stop(id: ServerId): Promise<void>;

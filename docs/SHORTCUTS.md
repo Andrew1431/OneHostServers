@@ -12,7 +12,7 @@ relying on a shortcut — never cut one silently.
 | 4 | No snapshot GC / retention | `@onehost/gcp` | lifecycle policy (keep N, age-out old snapshots) |
 | 5 | Naive op polling; no idempotency keys; Pub/Sub hand-off is a TODO log line | `@onehost/gcp` ops, `apps/interactions`, `apps/worker` | idempotency keys + retry/compensation; real Pub/Sub publish |
 | 6 | Idle agent signals stop fire-and-forget | `apps/agent` | confirm snapshot landed before worker deletes the disk |
-| 7 | Restored instances reuse a hardcoded `e2-custom-2-4096` machine type | `@onehost/gcp` `start()` | persist `MachineSpec` in the server record and read it on start |
+| 7 | ~~Restored instances reuse a hardcoded machine type~~ **RESOLVED** | `@onehost/gcp` | machine + disk type now persisted as snapshot labels and restored on `start` (overridable via flags). Still no full `MachineSpec` in a DB — fine until Firestore lands |
 | 8 | One shared firewall rule opens all game ports for all servers | `infra/main.tf` | per-server firewall scoping (each server opens only its own ports) |
 | 9 | Internal packages run from `src` via tsx; no build step | all packages | bundle (tsup/esbuild) per app for Cloud Run deploy; add TS project references |
 
