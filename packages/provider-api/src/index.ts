@@ -24,6 +24,16 @@ export interface StartOptions {
   diskType?: string;
 }
 
+/** One-off overrides when stopping. */
+export interface StopOptions {
+  /**
+   * Treat "no instance to stop" as success instead of throwing. Off by default
+   * so an operator typo still errors; on for idle/retried/swept stops where the
+   * VM may already be gone (idempotency — see docs/SHORTCUTS.md #5).
+   */
+  allowAlreadyStopped?: boolean;
+}
+
 export interface ServerProvider {
   /** First-time provision: fresh disk from a base image + boot. */
   create(spec: ServerSpec): Promise<RunningServer>;
@@ -31,8 +41,11 @@ export interface ServerProvider {
   /** Restore the latest snapshot into a disk and boot an instance. */
   start(id: ServerId, opts?: StartOptions): Promise<RunningServer>;
 
-  /** Snapshot the disk, then delete the instance + disk. Idle cost -> snapshots only. */
-  stop(id: ServerId): Promise<void>;
+  /**
+   * Quiesce the guest (graceful OS shutdown), snapshot the disk, then delete the
+   * instance + disk. Idle cost -> snapshots only.
+   */
+  stop(id: ServerId, opts?: StopOptions): Promise<void>;
 
   /** Delete the instance, disk, and all snapshots. Irreversible. */
   destroy(id: ServerId): Promise<void>;

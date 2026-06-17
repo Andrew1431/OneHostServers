@@ -158,8 +158,14 @@ hands-on (see `docs/SHORTCUTS.md` #1):
 ```bash
 pnpm cli create mc --vcpus 2 --memory 4096 --disk 20 --port tcp:25565
 # SSH in, install + start your game, then:
-pnpm cli stop mc        # snapshots the disk, deletes the VM -> ~$0 idle
+pnpm cli stop mc        # gracefully shuts down, snapshots the disk, deletes the VM -> ~$0 idle
 ```
+
+While SSHed in, set up the **graceful-stop contract** so snapshots are taken from
+a quiescent disk (clean world saves, no corruption): a systemd unit that stops
+your game container on OS shutdown. `stop`/`/stop` trigger an ACPI soft-off and
+wait for it. See **[`MACHINE_AGENT.md`](MACHINE_AGENT.md)** for the unit file,
+per-engine SIGTERM notes, and the optional bash idle-agent (no Node needed).
 
 After that it's all Discord, in your locked channel:
 

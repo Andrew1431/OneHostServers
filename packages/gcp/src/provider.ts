@@ -18,6 +18,7 @@ import type {
 import {
   type ServerProvider,
   type StartOptions,
+  type StopOptions,
   ServerNotFoundError,
 } from '@onehost/provider-api';
 import {
@@ -185,7 +186,7 @@ export class GcpServerProvider implements ServerProvider {
     });
   }
 
-  async stop(id: ServerId): Promise<void> {
+  async stop(id: ServerId, opts: StopOptions = {}): Promise<void> {
     const { projectId } = this.cfg;
     const name = instanceName(id);
 
@@ -193,6 +194,9 @@ export class GcpServerProvider implements ServerProvider {
     // different zone than configured, so we don't trust cfg.zone here.
     const found = await this.locate(id);
     if (found === undefined) {
+      // Already gone. An idle/retried/swept stop wants this to be success;
+      // an operator typo still errors by default.
+      if (opts.allowAlreadyStopped) return;
       throw new Error(`Server '${id}' is not running — nothing to stop`);
     }
     const { zone, instance } = found;
@@ -205,6 +209,17 @@ export class GcpServerProvider implements ServerProvider {
     const diskLabel = instance.labels?.[DISKTYPE_LABEL];
     if (machineLabel) sizing[MACHINE_LABEL] = machineLabel;
     if (diskLabel) sizing[DISKTYPE_LABEL] = diskLabel;
+
+    // 0. Quiesce the guest so the snapshot is consistent. `instances.stop` sends
+    //    an ACPI soft-off, which runs the VM's shutdown sequence (systemd stops
+    //    onehost-game.service -> `docker compose stop` -> SIGTERM + grace window
+    //    to the game). The op resolves only once the VM is TERMINATED, i.e. the
+    //    disk is quiescent — see MACHINE_AGENT.md for the on-box contract. We
+    //    skip this if the VM isn't RUNNING (already stopping/terminated).
+    if (instance.status === 'RUNNING') {
+      const [stopResp] = await this.instances.stop({ project: projectId, zone, instance: name });
+      await waitZonal(this.zoneOps, projectId, zone, stopResp);
+    }
 
     // 1. Snapshot the boot disk (labelled so we can find it on next start).
     const [snapResp] = await this.disks.createSnapshot({
@@ -259,6 +274,23 @@ export class GcpServerProvider implements ServerProvider {
     const state = mapInstanceStatus(found.instance.status ?? undefined);
     const address = extractAddress(found.instance);
     return address === undefined ? { state } : { state, address };
+  }
+
+  /**
+   * Resolve the live SSH target for a server: its instance name and the zone it
+   * actually runs in (capacity may have placed it off the configured zone, so we
+   * `locate` rather than assume). GCP-specific — SSH is a gcloud concern, not part
+   * of the cloud-agnostic provider seam — so this lives on the concrete class for
+   * the CLI to drive `gcloud compute ssh`.
+   */
+  async resolveSshTarget(
+    id: ServerId,
+  ): Promise<{ instanceName: string; zone: string; projectId: string }> {
+    const found = await this.locate(id);
+    if (found === undefined) {
+      throw new Error(`Server '${id}' is not running — start it before connecting`);
+    }
+    return { instanceName: instanceName(id), zone: found.zone, projectId: this.cfg.projectId };
   }
 
   async list(): Promise<ServerSummary[]> {

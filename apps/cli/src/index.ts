@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+import { spawnSync } from 'node:child_process';
 import type { ServerSpec, MachineSpec, ServerSummary } from '@onehost/core';
 import { viewServer } from '@onehost/core';
 import type { StartOptions } from '@onehost/provider-api';
@@ -62,6 +63,25 @@ async function main(): Promise<void> {
       const status = await provider.status(id);
       console.log(`${id}: ${status.state}${status.address ? ` @ ${status.address}` : ''}`);
       break;
+    }
+    case 'ssh': {
+      if (!id) return fail('ssh needs a server id');
+      // Resolve the live instance + its actual zone, then hand off to the user's
+      // gcloud (which carries their auth/keys). Anything after the id passes
+      // straight through — e.g. `ssh mc -- sudo docker compose logs`.
+      const target = await provider.resolveSshTarget(id);
+      const result = spawnSync(
+        'gcloud',
+        ['compute', 'ssh', target.instanceName, '--zone', target.zone, '--project', target.projectId, ...rest],
+        { stdio: 'inherit', shell: true },
+      );
+      if (result.error) {
+        if ((result.error as NodeJS.ErrnoException).code === 'ENOENT') {
+          return fail('gcloud not found on PATH — install the Google Cloud SDK to use `ssh`');
+        }
+        throw result.error;
+      }
+      process.exit(result.status ?? 0);
     }
     case 'destroy': {
       if (!id) return fail('destroy needs a server id');
@@ -209,6 +229,7 @@ function usage(): void {
       '  start <id>  [--disk-type pd-ssd] [--machine c2-standard-4]   # override to upgrade',
       '  stop <id>',
       '  status <id>',
+      '  ssh <id> [-- <remote command>]                               # gcloud compute ssh into it',
       '  list                                                         # all servers, all zones',
       '  destroy <id>',
       '  config --project <id> [--zone <zone>] [--keep-snapshots 3]   # save to .env once',
