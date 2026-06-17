@@ -8,11 +8,11 @@ output "network_tag" {
 }
 
 output "interactions_url" {
-  value       = google_cloud_run_v2_service.interactions.uri
-  description = "Set this (+ /) as the Discord app's Interactions Endpoint URL."
+  value       = var.enable_bot ? google_cloud_run_v2_service.interactions[0].uri : null
+  description = "Set this as the Discord app's Interactions Endpoint URL (when enable_bot)."
 }
 
 output "worker_url" {
-  value       = google_cloud_run_v2_service.worker.uri
-  description = "Private worker endpoint; the Pub/Sub push subscription targets it."
+  value       = var.enable_bot ? google_cloud_run_v2_service.worker[0].uri : null
+  description = "Private worker endpoint; the Pub/Sub push subscription targets it (when enable_bot)."
 }

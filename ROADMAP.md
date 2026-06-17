@@ -43,7 +43,7 @@ order of what to build next.
   channel/role permissions (resolves SHORTCUTS #3); the Pub/Sub hand-off is now
   real (resolves SHORTCUTS #5's transport gap). Slash-command registration:
   `pnpm --filter @onehost/interactions register`. Cloud Run + Pub/Sub deploy in
-  `infra/cloudrun.tf`; build/deploy steps in `docs/DEPLOY.md`. Local dev runs both
+  `infra/cloudrun.tf`; full setup in `SETUP.md`. Local dev runs both
   services without GCP via `JOB_TRANSPORT=http`.
 
 - [ ] **`cli init` first-run bootstrap** — generate `terraform.tfvars` + `.env`

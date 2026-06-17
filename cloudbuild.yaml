@@ -1,0 +1,29 @@
+# Build + push both control-plane images in one shot, no local Docker needed:
+#   gcloud builds submit --config cloudbuild.yaml .
+#
+# Build context is the repo root (workspace deps span packages). Override the
+# registry region with --substitutions=_REGION=… (defaults to Toronto).
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - apps/interactions/Dockerfile
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/onehost/interactions:latest
+      - .
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - apps/worker/Dockerfile
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/onehost/worker:latest
+      - .
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/onehost/interactions:latest
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/onehost/worker:latest
+substitutions:
+  _REGION: northamerica-northeast2
+options:
+  logging: CLOUD_LOGGING_ONLY

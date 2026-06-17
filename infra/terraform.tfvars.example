@@ -9,7 +9,10 @@ game_tcp_ports = ["25565"]
 game_udp_ports = ["2456-2458"]
 
 # --- Discord bot (Cloud Run + Pub/Sub) ---
-# Build + push the images first (see docs/DEPLOY.md), then fill these in.
+# Opt-in. Leave enable_bot = false to apply just the network + firewall (the CLI
+# hands-on path). To stand up the bot: build + push the images (see SETUP.md),
+# set enable_bot = true, and fill these in.
+enable_bot             = true
 default_zone           = "us-central1-a"
 discord_application_id = "000000000000000000"
 discord_public_key     = "your-app-public-key"

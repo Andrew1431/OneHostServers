@@ -15,7 +15,10 @@
  * guard in the endpoint. We register with no default member permissions so the
  * channel/role config is the single source of who-can-run.
  */
-export {}; // make this a module so top-level await is allowed
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+
+loadDotEnv(); // pull DISCORD_* from the repo-root .env so no shell sourcing is needed
 
 const APPLICATION_ID = required('DISCORD_APPLICATION_ID');
 const BOT_TOKEN = required('DISCORD_BOT_TOKEN');
@@ -77,8 +80,30 @@ for (const c of registered) console.log(`   /${c.name}`);
 function required(name: string): string {
   const value = process.env[name];
   if (!value) {
-    console.error(`✗ missing ${name}`);
+    console.error(`✗ missing ${name} (set it in the repo-root .env or the environment)`);
     process.exit(1);
   }
   return value;
+}
+
+/** Load KEY=VALUE pairs from the repo-root .env, without clobbering real env vars. */
+function loadDotEnv(): void {
+  let dir = process.cwd();
+  while (!existsSync(join(dir, 'pnpm-workspace.yaml'))) {
+    const parent = dirname(dir);
+    if (parent === dir) return; // not in the workspace; rely on the environment
+    dir = parent;
+  }
+  const path = join(dir, '.env');
+  if (!existsSync(path)) return;
+  for (const raw of readFileSync(path, 'utf8').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const eq = line.indexOf('=');
+    if (eq === -1) continue;
+    const key = line.slice(0, eq).trim();
+    if (key && process.env[key] === undefined) {
+      process.env[key] = line.slice(eq + 1).trim().replace(/^["']|["']$/g, '');
+    }
+  }
 }

@@ -10,7 +10,7 @@ is snapshotted and the instance is deleted. Boot it back from a Discord command.
 > Status: two working vertical slices. The GCP lifecycle (`@onehost/gcp` +
 > `@onehost/cli`) is the hands-on surface; the Discord bot (`apps/interactions` +
 > `apps/worker`, joined by Pub/Sub) is the serverless control plane — `/list`,
-> `/start <id>`, `/stop <id>`. Deploy steps in `docs/DEPLOY.md`.
+> `/start <id>`, `/stop <id>`. Full setup in `SETUP.md`.
 
 ## Why
 
@@ -33,8 +33,8 @@ apps/
   worker       consume Job -> drive provider -> edit the Discord reply         [Cloud Run]
   agent        runs ON the game VM: idle-poll -> request stop
 infra/         Terraform: network + firewall (main.tf) and the bot (cloudrun.tf)
+SETUP.md           fresh clone -> working bot, step by step
 docs/SHORTCUTS.md  every deliberate v1 shortcut + its refactor note
-docs/DEPLOY.md     build + deploy the Discord bot to Cloud Run
 ```
 
 Lifecycle is **disk snapshots**, so it's game-agnostic — OneHost never looks
