@@ -149,10 +149,13 @@ function runConfig(args: string[]): void {
     if (value === undefined) break;
     if (key === '--project') updates.GCP_PROJECT_ID = value;
     else if (key === '--zone') updates.GCP_ZONE = value;
-    else return fail(`unknown config flag: ${key}`);
+    else if (key === '--keep-snapshots') {
+      if (!Number.isInteger(Number(value))) return fail(`--keep-snapshots needs an integer`);
+      updates.ONEHOST_SNAPSHOT_KEEP = value;
+    } else return fail(`unknown config flag: ${key}`);
   }
   if (Object.keys(updates).length === 0) {
-    return fail('config needs --project <id> and/or --zone <zone>');
+    return fail('config needs --project <id>, --zone <zone>, and/or --keep-snapshots <n>');
   }
   const path = writeConfig(updates);
   console.log(`✅ saved to ${path}`);
@@ -193,7 +196,7 @@ function usage(): void {
       '  status <id>',
       '  list                                                         # all servers, all zones',
       '  destroy <id>',
-      '  config --project <id> [--zone <zone>]                        # save to .env once',
+      '  config --project <id> [--zone <zone>] [--keep-snapshots 3]   # save to .env once',
       '',
       '  --machine overrides --vcpus/--memory (pick a faster-core family than e2)',
       '  disk types: pd-standard (HDD) | pd-balanced (SSD) | pd-ssd (fast SSD)',

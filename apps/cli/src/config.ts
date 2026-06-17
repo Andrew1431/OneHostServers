@@ -16,12 +16,23 @@ export function loadGcpConfig(): GcpConfig {
   loadDotEnv();
   const projectId = required('GCP_PROJECT_ID');
   const zone = process.env.GCP_ZONE ?? 'us-central1-a';
+  const snapshotKeep = parseIntEnv('ONEHOST_SNAPSHOT_KEEP');
   return {
     projectId,
     zone,
     sourceImage: process.env.GCP_SOURCE_IMAGE ?? DEFAULT_SOURCE_IMAGE,
     networkTag: process.env.GCP_NETWORK_TAG ?? DEFAULT_NETWORK_TAG,
+    // Omit when unset so the provider falls back to its default (keeps portable).
+    ...(snapshotKeep === undefined ? {} : { snapshotKeep }),
   };
+}
+
+function parseIntEnv(name: string): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n)) throw new Error(`${name} must be an integer, got "${raw}"`);
+  return n;
 }
 
 /** Path to the repo-root `.env` (gitignored — safe for your project id). */

@@ -16,12 +16,11 @@ order of what to build next.
   `GCP_ZONE`; a `locate()` helper finds the instance across all zones first, so a
   server placed elsewhere by capacity (e.g. `mc` in `-b`) is handled cleanly.
   `GCP_ZONE` is now just the *default zone for `create`*. (`provider.ts` `locate`)
-
-## Next
-
-- [ ] **Snapshot GC on stop** — every `stop` adds a snapshot forever
-  (SHORTCUTS.md #4). Sweep to "keep latest N" so storage cost stays bounded once
-  servers cycle regularly.
+- [x] **Snapshot GC on stop** — `stop` prunes to the newest N snapshots per server
+  (`pruneSnapshots`). N defaults to `DEFAULT_SNAPSHOT_KEEP` (3); override with
+  `ONEHOST_SNAPSHOT_KEEP` / `cli config --keep-snapshots <n>`. Config-driven on
+  `GcpConfig.snapshotKeep` so a future per-server/GUI setting feeds the same knob;
+  `<= 0` keeps everything. (resolves SHORTCUTS.md #4)
 
 ## Later
 

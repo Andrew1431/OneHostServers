@@ -25,6 +25,7 @@ import {
   DISKTYPE_LABEL,
   DEFAULT_DISK_TYPE,
   DEFAULT_MACHINE_TYPE,
+  DEFAULT_SNAPSHOT_KEEP,
   type GcpConfig,
 } from './config.ts';
 import {
@@ -204,6 +205,9 @@ export class GcpServerProvider implements ServerProvider {
       instance: name,
     });
     await waitZonal(this.zoneOps, projectId, zone, delResp);
+
+    // 3. Prune old snapshots so storage stays bounded as the server cycles.
+    await this.pruneSnapshots(id, this.cfg.snapshotKeep ?? DEFAULT_SNAPSHOT_KEEP);
   }
 
   async destroy(id: ServerId): Promise<void> {
@@ -347,6 +351,27 @@ export class GcpServerProvider implements ServerProvider {
       if (snap.name) names.push(snap.name);
     }
     return names;
+  }
+
+  /** Keep the newest `keep` snapshots for a server; delete the rest. */
+  private async pruneSnapshots(id: ServerId, keep: number): Promise<void> {
+    if (keep <= 0) return; // <= 0 disables pruning (keep everything)
+    const { projectId } = this.cfg;
+    const name = instanceName(id);
+    const snaps: Array<{ name: string; ts: string }> = [];
+    const iterable = this.snapshots.listAsync({
+      project: projectId,
+      filter: `labels.${SERVER_LABEL}=${name}`,
+    });
+    for await (const snap of iterable) {
+      if (snap.name) snaps.push({ name: snap.name, ts: snap.creationTimestamp ?? '' });
+    }
+    // Newest first, then drop everything past the keep window.
+    snaps.sort((a, b) => b.ts.localeCompare(a.ts));
+    for (const stale of snaps.slice(keep)) {
+      const [del] = await this.snapshots.delete({ project: projectId, snapshot: stale.name });
+      await waitGlobal(this.globalOps, projectId, del);
+    }
   }
 
   /** Newest snapshot for a server (with its sizing labels), if any. */
