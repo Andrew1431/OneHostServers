@@ -107,7 +107,7 @@ export class GcpServerProvider implements ServerProvider {
       },
     });
     await waitZonal(this.zoneOps, projectId, zone, resp);
-    return { id: spec.id, address: await this.requireAddress(spec.id) };
+    return { id: spec.id, address: await this.requireAddress(spec.id, zone) };
   }
 
   async start(id: ServerId, opts: StartOptions = {}): Promise<RunningServer> {
@@ -161,20 +161,27 @@ export class GcpServerProvider implements ServerProvider {
       },
     });
     await waitZonal(this.zoneOps, projectId, zone, instResp);
-    return { id, address: await this.requireAddress(id) };
+    return { id, address: await this.requireAddress(id, zone) };
   }
 
   async stop(id: ServerId): Promise<void> {
-    const { projectId, zone } = this.cfg;
+    const { projectId } = this.cfg;
     const name = instanceName(id);
+
+    // Find where the instance actually runs — capacity may have placed it in a
+    // different zone than configured, so we don't trust cfg.zone here.
+    const found = await this.locate(id);
+    if (found === undefined) {
+      throw new Error(`Server '${id}' is not running — nothing to stop`);
+    }
+    const { zone, instance } = found;
 
     // Carry the instance's sizing forward so `start` can restore it (or it can
     // be overridden). Older instances may lack these labels — that's fine, the
     // restore falls back to defaults.
-    const instance = await this.getInstance(id);
     const sizing: Record<string, string> = { [SERVER_LABEL]: name };
-    const machineLabel = instance?.labels?.[MACHINE_LABEL];
-    const diskLabel = instance?.labels?.[DISKTYPE_LABEL];
+    const machineLabel = instance.labels?.[MACHINE_LABEL];
+    const diskLabel = instance.labels?.[DISKTYPE_LABEL];
     if (machineLabel) sizing[MACHINE_LABEL] = machineLabel;
     if (diskLabel) sizing[DISKTYPE_LABEL] = diskLabel;
 
@@ -200,16 +207,17 @@ export class GcpServerProvider implements ServerProvider {
   }
 
   async destroy(id: ServerId): Promise<void> {
-    const { projectId, zone } = this.cfg;
+    const { projectId } = this.cfg;
     const name = instanceName(id);
 
-    if (await this.instanceExists(id)) {
+    const found = await this.locate(id);
+    if (found !== undefined) {
       const [delResp] = await this.instances.delete({
         project: projectId,
-        zone,
+        zone: found.zone,
         instance: name,
       });
-      await waitZonal(this.zoneOps, projectId, zone, delResp);
+      await waitZonal(this.zoneOps, projectId, found.zone, delResp);
     }
 
     for (const snap of await this.listSnapshots(id)) {
@@ -219,13 +227,13 @@ export class GcpServerProvider implements ServerProvider {
   }
 
   async status(id: ServerId): Promise<ServerStatus> {
-    const instance = await this.getInstance(id);
-    if (instance === undefined) {
-      // No instance => stopped (snapshot may or may not exist; either way STOPPED).
+    const found = await this.locate(id);
+    if (found === undefined) {
+      // No instance in any zone => stopped (snapshot may or may not exist).
       return { state: 'STOPPED' };
     }
-    const state = mapInstanceStatus(instance.status ?? undefined);
-    const address = extractAddress(instance);
+    const state = mapInstanceStatus(found.instance.status ?? undefined);
+    const address = extractAddress(found.instance);
     return address === undefined ? { state } : { state, address };
   }
 
@@ -281,8 +289,8 @@ export class GcpServerProvider implements ServerProvider {
 
   // --- helpers ---------------------------------------------------------------
 
-  private async getInstance(id: ServerId) {
-    const { projectId, zone } = this.cfg;
+  private async getInstance(id: ServerId, zone: string) {
+    const { projectId } = this.cfg;
     try {
       const [instance] = await this.instances.get({
         project: projectId,
@@ -296,12 +304,32 @@ export class GcpServerProvider implements ServerProvider {
     }
   }
 
-  private async instanceExists(id: ServerId): Promise<boolean> {
-    return (await this.getInstance(id)) !== undefined;
+  /**
+   * Find a server's live instance across all zones, returning it with the zone
+   * it sits in. Lets stop/status/destroy work without knowing the zone up front,
+   * since capacity can place a server somewhere other than the configured zone.
+   */
+  private async locate(
+    id: ServerId,
+  ): Promise<{ instance: protos.google.cloud.compute.v1.IInstance; zone: string } | undefined> {
+    const { projectId } = this.cfg;
+    const name = instanceName(id);
+    const aggregated = this.instances.aggregatedListAsync({
+      project: projectId,
+      filter: `name=${name}`,
+    });
+    for await (const [scope, scoped] of aggregated) {
+      for (const instance of scoped.instances ?? []) {
+        if (instance.name === name) {
+          return { instance, zone: scope.replace(/^zones\//, '') };
+        }
+      }
+    }
+    return undefined;
   }
 
-  private async requireAddress(id: ServerId): Promise<string> {
-    const instance = await this.getInstance(id);
+  private async requireAddress(id: ServerId, zone: string): Promise<string> {
+    const instance = await this.getInstance(id, zone);
     const address = instance === undefined ? undefined : extractAddress(instance);
     if (address === undefined) throw new ServerNotFoundError(id);
     return address;

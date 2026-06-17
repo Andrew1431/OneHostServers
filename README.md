@@ -1,5 +1,7 @@
 # OneHost
 
+java -Xmx3G -jar server.jar nogui
+
 On-demand, pay-only-for-what-you-play dedicated game servers you self-host in
 your **own GCP project**. Spin up a VM, install any server software (Minecraft,
 Valheim, Astroneer, …), and when nobody's playing it costs ~pennies — the disk
