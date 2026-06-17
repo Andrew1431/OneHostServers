@@ -111,6 +111,30 @@ prune → notify.
   the container is stopped before signaling (server reads as down, user re-starts);
   otherwise worker re-checks player count before deleting.
 
+## Long-running-server nag — Discord ping when a VM has been up 8+ hours
+
+A server left RUNNING for hours (someone forgot to `/stop`) burns money. Detect it
+and nudge the channel.
+
+- **Detection (no agent needed):** a periodic **reconcile sweep** — Cloud Scheduler
+  → a Cloud Run/worker endpoint that runs `instances.list`/aggregatedList for
+  `onehost`-labelled RUNNING VMs and reads each one's `lastStartTimestamp` (fall
+  back to `creationTimestamp`). Uptime = now − that. Past a threshold (8h), notify.
+  This is the same sweep IDEAS.md "Idle self-teardown" wants as a lost-signal
+  backstop and SHORTCUTS #6 references — build once, serve both.
+- **Notify:** these alerts have **no Discord `interactionToken`** (no slash command
+  behind them), so the worker's `editOriginal` path doesn't apply. Post to a
+  **channel webhook** (store its URL as a secret/env) instead — same gap the idle
+  path has, so a `source` discriminator + webhook-notify branch on the `Job`/worker
+  unblocks both.
+- **Don't spam:** ping once per crossing, not every sweep. Cheapest is a dedup
+  marker (e.g. stamp an `onehost-nagged-at` label on the instance once pinged;
+  clear it on stop/start) so a 15-min sweep doesn't re-alert hourly.
+- **Threshold config:** `ONEHOST_MAX_UPTIME_HOURS` (0 = off), mirroring
+  `ONEHOST_SNAPSHOT_KEEP`. Optionally escalate (warn at 8h, auto-stop at 24h) —
+  but auto-stop reuses the graceful `provider.stop`, so it's a small step from the
+  nag once the sweep + webhook exist.
+
 ## Stable address — a fixed IP or domain instead of a random one each start
 
 Today create/start attach an **ephemeral** external IP (`provider.ts`
