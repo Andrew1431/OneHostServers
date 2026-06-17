@@ -7,3 +7,12 @@ ssh_source_ranges = ["0.0.0.0/0"]
 
 game_tcp_ports = ["25565"]
 game_udp_ports = ["2456-2458"]
+
+# --- Discord bot (Cloud Run + Pub/Sub) ---
+# Build + push the images first (see docs/DEPLOY.md), then fill these in.
+default_zone           = "us-central1-a"
+discord_application_id = "000000000000000000"
+discord_public_key     = "your-app-public-key"
+discord_channel_id     = "000000000000000000" # the one channel commands are allowed in
+interactions_image     = "us-central1-docker.pkg.dev/PROJECT/onehost/interactions:latest"
+worker_image           = "us-central1-docker.pkg.dev/PROJECT/onehost/worker:latest"

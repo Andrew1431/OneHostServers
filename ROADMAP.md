@@ -33,6 +33,19 @@ order of what to build next.
   for `northamerica-northeast2` (`packages/gcp/src/pricing.ts`) — region-specific,
   flagged as approximate elsewhere. (`apps/cli/src/interactive.ts`,
   `packages/gcp/src/catalog.ts`). Pairs with the resize picker in IDEAS.md entry 1.
+- [x] **Discord bot** — the real product UX. Webhook (HTTP-interactions) bot with
+  three commands: `/list` (also serves as status), `/start <id>`, `/stop <id>`.
+  Provisioning stays CLI-only by design. `apps/interactions` verifies signatures,
+  guards on `DISCORD_CHANNEL_ID`, and publishes a `Job` (`@onehost/jobs`) onto a
+  Pub/Sub topic, ACKing Discord with a "⏳ working" message inside the 3s window.
+  `apps/worker` consumes the push, drives the provider, and edits that same
+  message in place with the result (IP on start). AuthZ is delegated to Discord's
+  channel/role permissions (resolves SHORTCUTS #3); the Pub/Sub hand-off is now
+  real (resolves SHORTCUTS #5's transport gap). Slash-command registration:
+  `pnpm --filter @onehost/interactions register`. Cloud Run + Pub/Sub deploy in
+  `infra/cloudrun.tf`; build/deploy steps in `docs/DEPLOY.md`. Local dev runs both
+  services without GCP via `JOB_TRANSPORT=http`.
+
 - [ ] **`cli init` first-run bootstrap** — generate `terraform.tfvars` + `.env`
   interactively from `gcloud projects/regions`. (IDEAS.md entry 2)
-- [ ] **Discord bot** — the real product UX; full TUI dashboard is optional polish.
+- [ ] **TUI dashboard** — optional polish now that the bot is the real UX.

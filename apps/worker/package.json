@@ -5,13 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "tsx src/index.ts",
+    "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@onehost/core": "workspace:*",
     "@onehost/gcp": "workspace:*",
-    "@onehost/provider-api": "workspace:*",
-    "@onehost/state": "workspace:*"
+    "@onehost/jobs": "workspace:*",
+    "@onehost/provider-api": "workspace:*"
   },
   "devDependencies": {
     "tsx": "^4.19.0",

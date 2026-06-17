@@ -7,8 +7,10 @@ your **own GCP project**. Spin up a VM, install any server software (Minecraft,
 Valheim, Astroneer, …), and when nobody's playing it costs ~pennies — the disk
 is snapshotted and the instance is deleted. Boot it back from a Discord command.
 
-> Status: early scaffold. The GCP lifecycle (`@onehost/gcp` + `@onehost/cli`) is
-> the working vertical slice; Discord serverless plumbing is stubbed.
+> Status: two working vertical slices. The GCP lifecycle (`@onehost/gcp` +
+> `@onehost/cli`) is the hands-on surface; the Discord bot (`apps/interactions` +
+> `apps/worker`, joined by Pub/Sub) is the serverless control plane — `/list`,
+> `/start <id>`, `/stop <id>`. Deploy steps in `docs/DEPLOY.md`.
 
 ## Why
 
@@ -24,13 +26,15 @@ packages/
   provider-api the cloud seam (interface only) — add AWS later = 1 new package
   gcp          GCP implementation: instances, disks, snapshots, labels
   state        persistence boundary (in-memory fake now, Firestore later)
+  jobs         the control-plane hand-off: Job type + publisher (Pub/Sub | HTTP)
 apps/
   cli          drive the GCP provider directly — the hands-on playground
-  interactions Discord HTTP-interactions endpoint (verify + deferred ack)  [Cloud Run]
-  worker       Pub/Sub job handler: provider + state + Discord follow-up   [Cloud Run]
+  interactions Discord HTTP-interactions endpoint: verify + AuthZ + enqueue   [Cloud Run]
+  worker       consume Job -> drive provider -> edit the Discord reply         [Cloud Run]
   agent        runs ON the game VM: idle-poll -> request stop
-infra/         Terraform bootstrap: network + firewall
+infra/         Terraform: network + firewall (main.tf) and the bot (cloudrun.tf)
 docs/SHORTCUTS.md  every deliberate v1 shortcut + its refactor note
+docs/DEPLOY.md     build + deploy the Discord bot to Cloud Run
 ```
 
 Lifecycle is **disk snapshots**, so it's game-agnostic — OneHost never looks

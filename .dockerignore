@@ -1,0 +1,14 @@
+node_modules
+**/node_modules
+.git
+.turbo
+**/.turbo
+dist
+**/dist
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+infra/.terraform
+infra/*.tfstate
+infra/*.tfstate.*

@@ -5,10 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "tsx src/index.ts",
+    "start": "tsx src/index.ts",
+    "register": "tsx src/register.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@onehost/core": "workspace:*",
+    "@onehost/jobs": "workspace:*",
     "discord-interactions": "^4.1.0"
   },
   "devDependencies": {

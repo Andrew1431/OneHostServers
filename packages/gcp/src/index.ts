@@ -12,8 +12,10 @@ export {
 } from './pricing.ts';
 export {
   type GcpConfig,
+  configFromEnv,
   SERVER_LABEL,
   DEFAULT_SOURCE_IMAGE,
   DEFAULT_NETWORK_TAG,
   DEFAULT_SNAPSHOT_KEEP,
+  DEFAULT_ZONE,
 } from './config.ts';

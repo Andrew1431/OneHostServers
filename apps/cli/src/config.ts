@@ -1,38 +1,16 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import {
-  type GcpConfig,
-  DEFAULT_SOURCE_IMAGE,
-  DEFAULT_NETWORK_TAG,
-} from '@onehost/gcp';
+import { type GcpConfig, configFromEnv } from '@onehost/gcp';
 
 /**
  * Pull deployment config from the environment, falling back to a `.env` file at
  * the repo root so you can set GCP_PROJECT_ID / GCP_ZONE once instead of every
- * command. Real env vars always win over the file. The deployed apps will load
- * the same shape from Secret Manager / env — this `.env` step is CLI-only.
+ * command. Real env vars always win over the file. The deployed apps load the
+ * same shape via `configFromEnv` — this repo-root `.env` step is CLI-only.
  */
 export function loadGcpConfig(): GcpConfig {
   loadDotEnv();
-  const projectId = required('GCP_PROJECT_ID');
-  const zone = process.env.GCP_ZONE ?? 'us-central1-a';
-  const snapshotKeep = parseIntEnv('ONEHOST_SNAPSHOT_KEEP');
-  return {
-    projectId,
-    zone,
-    sourceImage: process.env.GCP_SOURCE_IMAGE ?? DEFAULT_SOURCE_IMAGE,
-    networkTag: process.env.GCP_NETWORK_TAG ?? DEFAULT_NETWORK_TAG,
-    // Omit when unset so the provider falls back to its default (keeps portable).
-    ...(snapshotKeep === undefined ? {} : { snapshotKeep }),
-  };
-}
-
-function parseIntEnv(name: string): number | undefined {
-  const raw = process.env[name];
-  if (raw === undefined || raw.trim() === '') return undefined;
-  const n = Number(raw);
-  if (!Number.isInteger(n)) throw new Error(`${name} must be an integer, got "${raw}"`);
-  return n;
+  return configFromEnv();
 }
 
 /** Path to the repo-root `.env` (gitignored — safe for your project id). */
@@ -87,14 +65,4 @@ function repoRoot(): string {
     if (parent === dir) return process.cwd();
     dir = parent;
   }
-}
-
-function required(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(
-      `Missing ${name}. Set it once with: onehost config --project <id> [--zone <zone>]`,
-    );
-  }
-  return value;
 }

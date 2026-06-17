@@ -67,19 +67,22 @@ prune → notify.
   (`docker compose stop` / Minecraft `save-all`+`stop`) so the disk is quiescent,
   *then* signals; worker snapshots the still-running-but-idle VM and deletes it.
   Resolves SHORTCUTS #6 (snapshot lands before disk delete).
-- **Recommended transport:** agent publishes `{kind:'stop', id}` to the same
-  Pub/Sub topic the Discord path uses — VM SA needs only `pubsub.publisher` on one
-  topic, and the worker's stop branch is reused. (Alt: authenticated HTTP to Cloud
-  Run via metadata ID token — the current `STOP_ENDPOINT` skeleton.)
+- **Recommended transport:** agent publishes a stop `Job` to the same Pub/Sub
+  topic the Discord path uses — both now exist: topic `onehost-jobs`
+  (`infra/cloudrun.tf`) and `@onehost/jobs` (`Job` type + `PubSubPublisher`), and
+  the worker's `stop` branch (`apps/worker` `handleJob`) is already reused. VM SA
+  needs only `pubsub.publisher` on that one topic. (Alt: authenticated HTTP to
+  Cloud Run via metadata ID token — the current `STOP_ENDPOINT` skeleton.)
 - **Open decisions (deferred, not yet chosen):**
   - Pub/Sub publish vs HTTP for the signal.
   - Whether to add a control-plane **reconcile sweep** (Cloud Scheduler lists
     RUNNING servers, stops any idle past threshold) as a backstop for a lost
     signal — SHORTCUTS #6 is fire-and-forget, so a dropped publish = a VM that
     bills forever. (GCE `max-run-duration` is a cruder hard ceiling.)
-- **Schema gap:** an idle stop has no `interactionToken` — `Job`/`followUp`
-  (`apps/worker`) assume a Discord interaction is waiting. Needs a nullable token
-  + channel-webhook notify, or a `source: 'discord' | 'idle'` discriminator.
+- **Schema gap:** an idle stop has no `interactionToken` — every `Job` variant in
+  `@onehost/jobs` currently requires one, and the worker's `followUp` edits a
+  waiting Discord interaction. Needs a nullable token + channel-webhook notify, or
+  a `source: 'discord' | 'idle'` discriminator on the `Job`.
 - **Idempotency gap:** `provider.stop` throws "not running" when the instance is
   already gone; an idle/retried/swept stop should treat "already stopped" as
   success. Relates to SHORTCUTS #5 idempotency keys.
@@ -95,10 +98,15 @@ instance, the IP changes every cycle. Players want a constant address.
 
 - **Same IP every time:** reserve a **regional static external IP** and set it as
   `natIP` on create/start. Stable across stop/start and across zones within the
-  region. Small cost: GCP bills external IPv4 (~$0.005/hr ≈ a few $/mo); a static
-  IP also bills while *reserved but unattached* — i.e. during idle when the VM is
-  deleted. Roughly +$3–4/mo per server. One reserved IP per server (or a shared
-  pool) is a design choice.
+  region. **Cost works against the idle-delete model:** GCP (Toronto SKUs) bills an
+  external IPv4 at $0.005/hr while *attached to a running VM* (~$3.65/mo) but
+  $0.011/hr while *reserved-but-unattached* (~$8/mo). Because OneHost deletes the
+  VM when idle, a reserved static IP sits unattached most of the time → billed at
+  the *higher* idle rate during exactly the periods the snapshot-delete model
+  makes cheap. Budget ~$5–8/mo per server, skewing to $8 the more idle it is.
+  There is no "static but only pay while on" — static = reserved 24/7; releasing
+  it to avoid the idle charge loses the reservation (next start gets a new IP =
+  ephemeral). Ephemeral (today) is $0.005/hr while running, $0 while idle.
 - **Friendly name without buying a domain:** a free dynamic-DNS subdomain
   (DuckDNS / No-IP / afraid.org) — `foo.duckdns.org` — updated via API on each
   start once the new IP is known (agent/worker hits the DDNS update URL). $0.
