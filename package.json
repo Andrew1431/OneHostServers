@@ -10,7 +10,8 @@
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
     "cli": "pnpm --filter @onehost/cli start",
-    "deploy": "node scripts/deploy.mjs"
+    "deploy": "node scripts/deploy.mjs",
+    "prune-images": "node scripts/prune-images.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
