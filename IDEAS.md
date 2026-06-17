@@ -52,3 +52,59 @@ server `mc` ended up in `-b`, not the default `-a`).
   becomes zone-agnostic, removing a whole class of "server not found" confusion.
 - Pairs naturally with recording the chosen zone per-server on create/stop so
   start can restore into a zone with capacity and remember where it went.
+
+## Idle self-teardown — how an instance triggers its own stop
+
+The agent runs ON the game VM and detects idleness (`apps/agent`). The open
+question is how that turns into a snapshot + disk/VM delete. Settled shape: the
+VM **cannot run its own teardown** — `instances.delete` kills the process
+mid-sequence (prune/state/notify never run), it would need compute-admin on an
+untrusted game box, and a running disk snapshots dirty. So the agent only
+*signals*; an off-box worker (`apps/worker` `handleJob`) does snapshot → delete →
+prune → notify.
+
+- **Clean ordering:** on-box agent gracefully stops the container first
+  (`docker compose stop` / Minecraft `save-all`+`stop`) so the disk is quiescent,
+  *then* signals; worker snapshots the still-running-but-idle VM and deletes it.
+  Resolves SHORTCUTS #6 (snapshot lands before disk delete).
+- **Recommended transport:** agent publishes `{kind:'stop', id}` to the same
+  Pub/Sub topic the Discord path uses — VM SA needs only `pubsub.publisher` on one
+  topic, and the worker's stop branch is reused. (Alt: authenticated HTTP to Cloud
+  Run via metadata ID token — the current `STOP_ENDPOINT` skeleton.)
+- **Open decisions (deferred, not yet chosen):**
+  - Pub/Sub publish vs HTTP for the signal.
+  - Whether to add a control-plane **reconcile sweep** (Cloud Scheduler lists
+    RUNNING servers, stops any idle past threshold) as a backstop for a lost
+    signal — SHORTCUTS #6 is fire-and-forget, so a dropped publish = a VM that
+    bills forever. (GCE `max-run-duration` is a cruder hard ceiling.)
+- **Schema gap:** an idle stop has no `interactionToken` — `Job`/`followUp`
+  (`apps/worker`) assume a Discord interaction is waiting. Needs a nullable token
+  + channel-webhook notify, or a `source: 'discord' | 'idle'` discriminator.
+- **Idempotency gap:** `provider.stop` throws "not running" when the instance is
+  already gone; an idle/retried/swept stop should treat "already stopped" as
+  success. Relates to SHORTCUTS #5 idempotency keys.
+- **Rejoin race:** player connects between signal and delete — acceptable in v1 if
+  the container is stopped before signaling (server reads as down, user re-starts);
+  otherwise worker re-checks player count before deleting.
+
+## Stable address — a fixed IP or domain instead of a random one each start
+
+Today create/start attach an **ephemeral** external IP (`provider.ts`
+`networkInterface`, no `natIP`), and since stop/start deletes + recreates the
+instance, the IP changes every cycle. Players want a constant address.
+
+- **Same IP every time:** reserve a **regional static external IP** and set it as
+  `natIP` on create/start. Stable across stop/start and across zones within the
+  region. Small cost: GCP bills external IPv4 (~$0.005/hr ≈ a few $/mo); a static
+  IP also bills while *reserved but unattached* — i.e. during idle when the VM is
+  deleted. Roughly +$3–4/mo per server. One reserved IP per server (or a shared
+  pool) is a design choice.
+- **Friendly name without buying a domain:** a free dynamic-DNS subdomain
+  (DuckDNS / No-IP / afraid.org) — `foo.duckdns.org` — updated via API on each
+  start once the new IP is known (agent/worker hits the DDNS update URL). $0.
+- **Owned domain:** ~$10–15/yr; host in Cloud DNS (cheap) or registrar DNS. Lets
+  you use an **SRV record** (e.g. Minecraft `_minecraft._tcp`) so players type just
+  the domain and the port is hidden — DDNS providers usually can't do SRV.
+- **Cleanest combo:** static IP **+** any DNS name pointed at it once. The static
+  IP means the A record never needs per-start updates, sidestepping dynamic DNS
+  entirely. A domain is **not** required; it only buys a nicer hostname / SRV.
