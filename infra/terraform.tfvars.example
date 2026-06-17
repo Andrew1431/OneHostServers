@@ -1,0 +1,9 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+project_id = "your-gcp-project-id"
+region     = "us-central1"
+
+# Lock this to your own IP for safety, e.g. ["203.0.113.4/32"]
+ssh_source_ranges = ["0.0.0.0/0"]
+
+game_tcp_ports = ["25565"]
+game_udp_ports = ["2456-2458"]
