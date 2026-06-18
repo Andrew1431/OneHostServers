@@ -9,6 +9,16 @@ OneHost never looks inside your disk — it snapshots and restores it whole (it'
 game-agnostic by design). That makes the disk's **on-disk consistency at snapshot
 time** entirely your responsibility. This doc is that contract.
 
+> **The contract is about behavior, not technology.** Everything below is stated
+> in terms of Docker Compose + systemd because that's the SHORTCUTS #1 convention
+> and makes for a concrete sample — but nothing here *requires* Docker. The only
+> real requirements are: (1) your game flushes/saves and exits cleanly when the OS
+> shuts down (the ACPI window, below), and (2) — if you want self-teardown — the
+> box can signal the control plane. Fulfill those with whatever fits: a bare-metal
+> binary under systemd (like a vanilla Minecraft server), an OpenRC/init script,
+> Podman, a raw process supervised however you like. Read the Docker examples as
+> *one worked instance* of the contract, not as the contract itself.
+
 ## How a stop actually happens
 
 `provider.stop` (driven by the CLI `stop` or the Discord `/stop`) runs, in order:
@@ -39,8 +49,14 @@ that runs your game and stops it cleanly on OS shutdown. With this in place,
 graceful stop works for the manual `stop`/`/stop` paths with **no agent process
 running at all**.
 
-Assuming the game runs under Docker Compose (the SHORTCUTS #1 convention) in
-`/opt/onehost`:
+The sample below uses a systemd unit driving Docker Compose (the SHORTCUTS #1
+convention) in `/opt/onehost`. If you don't use Docker, the shape is identical —
+swap `ExecStart`/`ExecStop` for however you start and cleanly stop your server
+(e.g. a launch script and an RCON `save-all`+`stop` for bare-metal Minecraft).
+What matters is that `ExecStop` drains and saves within the ACPI window, not that
+it shells out to `docker`.
+
+Assuming the game runs under Docker Compose:
 
 ```ini
 # /etc/systemd/system/onehost-game.service
