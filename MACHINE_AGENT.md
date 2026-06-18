@@ -110,6 +110,8 @@ images ship with `gcloud` and a metadata server, so signalling is free:
 # /opt/onehost/idle-check.sh — run by a systemd timer every minute.
 set -euo pipefail
 
+# The provider stamps `onehost-server-id` metadata on every create/start, so this
+# resolves with no manual setup. (You can also keep it in a sourced config file.)
 SERVER_ID="$(curl -s -H 'Metadata-Flavor: Google' \
   http://metadata.google.internal/computeMetadata/v1/instance/attributes/onehost-server-id)"
 IDLE_LIMIT_MIN=15
@@ -127,10 +129,13 @@ now=$(date +%s)
 empty_since=$(cat "$STATE_FILE")
 
 if (( now - empty_since >= IDLE_LIMIT_MIN * 60 )); then
-  # Signal the control plane. The VM SA needs only roles/pubsub.publisher
-  # on this one topic — nothing that can touch instances/disks/snapshots.
+  # Signal the control plane. The attached `onehost-game-vm` SA (Terraform) holds
+  # only roles/pubsub.publisher on this one topic — nothing that can touch
+  # instances/disks/snapshots. The worker consumes this exact message and runs
+  # provider.stop (verified end-to-end). The Job type has no `source` field today,
+  # so don't add one — a plain {kind,id} is what's consumed.
   gcloud pubsub topics publish onehost-jobs \
-    --message "{\"kind\":\"stop\",\"id\":\"${SERVER_ID}\",\"source\":\"idle\"}"
+    --message "{\"kind\":\"stop\",\"id\":\"${SERVER_ID}\"}"
   rm -f "$STATE_FILE"
 fi
 ```
@@ -142,20 +147,35 @@ fi
 
 The `count_players` probe is the only game-specific part:
 
-- **Generic:** any established TCP connection on the game port —
+- **TCP games:** any established connection on the game port —
   `ss -tn state established "( sport = :25565 )" | tail -n +2 | wc -l`.
+- **UDP games (Enshrouded, Valheim, …):** TCP connection-counting doesn't apply
+  (UDP is connectionless). Use the server's own session output or a query. For
+  Enshrouded we parse the container's "Session" block — each connected client is
+  an `OperatingNormally` machine (m#0 is the server's own baseline):
+  `docker logs --since 45s enshrouded | awk '/Session/{c=0} /OperatingNormally/{c++} END{print c+0}'`.
+  Alternatives: `conntrack -L -p udp --dport <port>` (needs conntrack-tools), or a
+  Steam A2S query.
 - **Minecraft:** a Server List Ping or RCON `list` for the real count.
-- **Other:** the game's own query protocol.
 
-### Two gaps the idle path still has (see IDEAS.md / SHORTCUTS.md)
+### Where the idle path stands (see IDEAS.md / SHORTCUTS.md)
 
+The signal → teardown path **works end-to-end** (verified): a VM publishes
+`{kind:stop,id}`, the push subscription delivers it, and the worker runs
+`provider.stop` (ACPI → snapshot → delete). Remaining rough edges:
+
+- **No notify on idle stops:** an idle stop has no Discord `interactionToken`, so
+  the worker's reply-edit is a silent no-op (the stop still happens). A
+  channel-webhook notify path would surface idle teardowns.
+- **No authz/validation on the job body:** `parsePushBody` casts without checking,
+  and the worker acts on whatever `id` arrives. Any principal that can publish to
+  `onehost-jobs` can stop *any* server — so a compromised game box could stop
+  others'. Per-server authz (bind the VM's SA/message to its own id) is the
+  hardening.
 - **Idempotency:** an idle stop may race a manual one. The worker should call
   `provider.stop(id, { allowAlreadyStopped: true })` so "already gone" is success,
-  not an error. (The provider already supports this flag; the worker's idle
-  branch isn't wired yet.)
-- **Notify + schema:** an idle stop has no Discord `interactionToken`. The `Job`
-  type (`@onehost/jobs`) needs a `source: 'discord' | 'idle'` discriminator and a
-  channel-webhook notify path before the bash signal above can be consumed.
+  not an error. (The provider supports the flag; the worker's stop branch doesn't
+  pass it yet.)
 - **Lost signal:** the publish is fire-and-forget (SHORTCUTS #6). A dropped
   message = a VM that bills forever; a control-plane reconcile sweep (Cloud
   Scheduler) is the planned backstop.
@@ -166,8 +186,14 @@ The `count_players` probe is the only game-specific part:
       (`init: true` / `tini`, sensible `stop_grace_period`).
 - [ ] `onehost-game.service` installed + enabled; `TimeoutStopSec` < ~90s.
 - [ ] `gcloud compute instances stop` drains cleanly (manual test).
-- [ ] Instance has metadata `onehost-server-id` (so the agent knows its id).
-- [ ] *(only for idle self-teardown)* `onehost-idle.timer` + `count_players`
-      probe; VM service account has `roles/pubsub.publisher` on `onehost-jobs`.
+- [ ] *(only for idle self-teardown)* `onehost-idle.timer` + a `count_players`
+      probe installed on the box.
 
-Items 1–3 are required for safe snapshots. 4–5 are only for self-teardown.
+Items 1–3 are required for safe snapshots; 4 is only for self-teardown.
+
+Provided automatically by the provider/Terraform (nothing to do by hand):
+
+- Instance metadata `onehost-server-id` — stamped on every create/start.
+- The `onehost-game-vm` SA (`roles/pubsub.publisher` on `onehost-jobs`) — created
+  by Terraform when the control plane is enabled, and attached to the VM by the
+  provider when `GCP_GAME_VM_SA` is set. This is what lets the box signal at all.
