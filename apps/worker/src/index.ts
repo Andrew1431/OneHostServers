@@ -24,6 +24,11 @@ const APPLICATION_ID = process.env.DISCORD_APPLICATION_ID ?? '';
 const DISCORD_API = 'https://discord.com/api/v10';
 /** Optional shared secret on the push URL (?token=). Empty = rely on Cloud Run IAM. */
 const PUSH_TOKEN = process.env.PUBSUB_PUSH_TOKEN ?? '';
+/**
+ * Channel webhook for jobs with no interaction to edit (idle self-teardown, and
+ * later the reconcile sweep / long-running nag). Empty = those jobs run silently.
+ */
+const CHANNEL_WEBHOOK_URL = process.env.DISCORD_CHANNEL_WEBHOOK_URL ?? '';
 
 /** A subset of the Discord embed object — enough to render rich status replies. */
 interface Embed {
@@ -48,8 +53,12 @@ const STATE_COLOR: Record<ServerState, number> = {
 
 export interface WorkerDeps {
   provider: ServerProvider;
-  /** Edits the original interaction reply. Defaults to Discord's REST API. */
-  followUp: (interactionToken: string, message: DiscordMessage) => Promise<void>;
+  /**
+   * Reports a job's result. Routes to the originating Discord interaction reply
+   * when the job carries a token, else to the channel webhook (idle/sweep/nag
+   * jobs have none). Defaults to {@link notify}.
+   */
+  notify: (job: Job, message: DiscordMessage) => Promise<void>;
 }
 
 export async function handleJob(deps: WorkerDeps, job: Job): Promise<void> {
@@ -57,12 +66,15 @@ export async function handleJob(deps: WorkerDeps, job: Job): Promise<void> {
     switch (job.kind) {
       case 'start': {
         await deps.provider.start(job.id);
-        await deps.followUp(job.interactionToken, { embeds: [await startedEmbed(deps, job.id)] });
+        await deps.notify(job, { embeds: [await startedEmbed(deps, job.id)] });
         break;
       }
       case 'stop': {
-        await deps.provider.stop(job.id);
-        await deps.followUp(job.interactionToken, {
+        // allowAlreadyStopped: an idle self-teardown may race a manual /stop, and
+        // at-least-once Pub/Sub can redeliver a stop we already ran — both should
+        // read as success, not a scary "failed" reply (SHORTCUTS #6d).
+        await deps.provider.stop(job.id, { allowAlreadyStopped: true });
+        await deps.notify(job, {
           embeds: [
             {
               title: `${STATE_ICON.STOPPED} ${job.id} stopped`,
@@ -75,13 +87,13 @@ export async function handleJob(deps: WorkerDeps, job: Job): Promise<void> {
       }
       case 'list': {
         const servers = await deps.provider.list();
-        await deps.followUp(job.interactionToken, { embeds: [listEmbed(servers)] });
+        await deps.notify(job, { embeds: [listEmbed(servers)] });
         break;
       }
     }
   } catch (err) {
     const target = job.kind === 'list' ? 'servers' : job.id;
-    await deps.followUp(job.interactionToken, {
+    await deps.notify(job, {
       embeds: [
         {
           title: `${STATE_ICON.ERROR} ${target} failed`,
@@ -139,6 +151,20 @@ function listEmbed(servers: ServerSummary[]): Embed {
 }
 
 /**
+ * Default reporter. A Discord-originated job edits its waiting "⏳ working" reply
+ * via the interaction token; a tokenless job (idle self-teardown, and later the
+ * reconcile sweep / long-running nag) is announced to the channel webhook. Both
+ * accept the same `{content, embeds}` body, so one DiscordMessage serves both.
+ */
+async function notify(job: Job, message: DiscordMessage): Promise<void> {
+  if (job.interactionToken) {
+    await editOriginal(job.interactionToken, message);
+  } else {
+    await postWebhook(message);
+  }
+}
+
+/**
  * Edit the original interaction reply (the "⏳ working" message). No bot token
  * needed — the interaction token authorizes it, valid for 15 minutes.
  */
@@ -158,11 +184,31 @@ async function editOriginal(interactionToken: string, message: DiscordMessage): 
   }
 }
 
+/**
+ * Post to the channel webhook for jobs with no interaction to edit. A no-op (with
+ * a log line) when unconfigured, so an idle teardown still completes silently
+ * rather than failing.
+ */
+async function postWebhook(message: DiscordMessage): Promise<void> {
+  if (!CHANNEL_WEBHOOK_URL) {
+    console.log('DISCORD_CHANNEL_WEBHOOK_URL unset — tokenless job ran without notifying');
+    return;
+  }
+  const res = await fetch(CHANNEL_WEBHOOK_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(message),
+  });
+  if (!res.ok) {
+    console.error(`discord webhook post failed: ${res.status} ${await res.text()}`);
+  }
+}
+
 // --- HTTP transport (Pub/Sub push) -----------------------------------------
 
 const deps: WorkerDeps = {
   provider: new GcpServerProvider(configFromEnv()),
-  followUp: editOriginal,
+  notify,
 };
 
 const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {

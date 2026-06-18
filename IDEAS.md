@@ -41,13 +41,10 @@ never hand-edit either.
 
 ## Zone auto-discovery for stop / status / start / destroy — DONE
 
-Resolved. `stop`/`status`/`destroy` resolve a server's actual zone via `locate`
-(name-filtered aggregatedList) instead of trusting `GCP_ZONE`, and `list` uses
-aggregatedList directly — so a server that capacity placed in a different zone
-(the POC `mc` landed in `-b`, not the default `-a`) is still found. `create`/`start`
-fall back across the region's zones (`withZoneFallback`), so `GCP_ZONE` is now just
-the *preferred* placement, not a hard requirement. Remaining nice-to-have: see the
-machine-substitution entry above for when *no* zone has the requested type.
+Resolved (see SHORTCUTS #2). Lifecycle ops discover a server's actual zone rather
+than trusting `GCP_ZONE`, and create/start fall back across the region's zones on
+capacity — `GCP_ZONE` is now just preferred placement. Remaining nice-to-have:
+the machine-substitution entry above, for when *no* zone has the requested type.
 
 ## Substitute a similar machine type when a zone is out of capacity — NOT YET BUILT
 
@@ -74,43 +71,32 @@ have stock — operational cost is low enough that a slightly different machine 
   spec. Prefer transient substitution (or at least notify the user it happened).
 - **Layering:** keep zone fallback first; add the type ladder *within* each zone.
 
-## Idle self-teardown — how an instance triggers its own stop
+## Idle self-teardown — how an instance triggers its own stop — MOSTLY DONE
 
-The agent runs ON the game VM and detects idleness (a bash `idle-check.sh` on an
-`onehost-idle.timer` — see MACHINE_AGENT.md; not a Node service). The open
-question is how that turns into a snapshot + disk/VM delete. Settled shape: the
-VM **cannot run its own teardown** — `instances.delete` kills the process
-mid-sequence (prune/state/notify never run), it would need compute-admin on an
-untrusted game box, and a running disk snapshots dirty. So the agent only
-*signals*; an off-box worker (`apps/worker` `handleJob`) does snapshot → delete →
-prune → notify.
+Core path works end-to-end (see SHORTCUTS #6 and MACHINE_AGENT.md "Where the idle
+path stands"). The on-VM agent (bash `idle-check.sh` on a systemd timer) gracefully
+stops the container, then **signals only** — it never runs its own teardown
+(`instances.delete` would kill it mid-sequence and need compute-admin on an
+untrusted box). It publishes a `{kind:stop,id}` `Job` to the `onehost-jobs` topic
+with its powerless `onehost-game-vm` SA (`pubsub.publisher` only); the off-box
+worker runs `provider.stop` (ACPI quiesce → snapshot → delete → prune).
 
-- **Clean ordering:** on-box agent gracefully stops the container first
-  (`docker compose stop` / Minecraft `save-all`+`stop`) so the disk is quiescent,
-  *then* signals; worker snapshots the still-running-but-idle VM and deletes it.
-  Resolves SHORTCUTS #6 (snapshot lands before disk delete).
-- **Recommended transport:** agent publishes a stop `Job` to the same Pub/Sub
-  topic the Discord path uses — both now exist: topic `onehost-jobs`
-  (`infra/cloudrun.tf`) and `@onehost/jobs` (`Job` type + `PubSubPublisher`), and
-  the worker's `stop` branch (`apps/worker` `handleJob`) is already reused. VM SA
-  needs only `pubsub.publisher` on that one topic. (Alt: authenticated HTTP to
-  Cloud Run via metadata ID token — the current `STOP_ENDPOINT` skeleton.)
-- **Open decisions (deferred, not yet chosen):**
-  - Pub/Sub publish vs HTTP for the signal.
-  - Whether to add a control-plane **reconcile sweep** (Cloud Scheduler lists
-    RUNNING servers, stops any idle past threshold) as a backstop for a lost
-    signal — SHORTCUTS #6 is fire-and-forget, so a dropped publish = a VM that
-    bills forever. (GCE `max-run-duration` is a cruder hard ceiling.)
-- **Schema gap:** an idle stop has no `interactionToken` — every `Job` variant in
-  `@onehost/jobs` currently requires one, and the worker's `followUp` edits a
-  waiting Discord interaction. Needs a nullable token + channel-webhook notify, or
-  a `source: 'discord' | 'idle'` discriminator on the `Job`.
-- **Idempotency gap:** `provider.stop` throws "not running" when the instance is
-  already gone; an idle/retried/swept stop should treat "already stopped" as
-  success. Relates to SHORTCUTS #5 idempotency keys.
-- **Rejoin race:** player connects between signal and delete — acceptable in v1 if
-  the container is stopped before signaling (server reads as down, user re-starts);
-  otherwise worker re-checks player count before deleting.
+Recently closed: tokenless jobs now notify a channel webhook
+(`DISCORD_CHANNEL_WEBHOOK_URL`; `Job.interactionToken` is optional and the worker's
+`notify` routes by its presence), and the worker passes `allowAlreadyStopped` so an
+idle/manual stop race (or a Pub/Sub redelivery) reads as success.
+
+Remaining open work (all also tracked in SHORTCUTS #6):
+
+- **Lost-signal backstop:** the publish is fire-and-forget, so a dropped message =
+  a VM that bills forever. Wants a control-plane **reconcile sweep** (Cloud
+  Scheduler lists RUNNING servers, stops any idle past threshold). Shared with the
+  long-running-server nag below — build the sweep once, serve both. (GCE
+  `max-run-duration` is a cruder hard ceiling.)
+- **No authz on the job body:** any topic publisher can stop any `id`; bind the
+  VM's SA/message to its own id.
+- **Rejoin race:** player connects between signal and delete — acceptable in v1
+  since the container is stopped before signaling (reads as down, user re-starts).
 
 ## Long-running-server nag — Discord ping when a VM has been up 8+ hours
 

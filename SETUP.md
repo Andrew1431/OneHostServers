@@ -109,6 +109,9 @@ enable_bot             = true  # turns on the Cloud Run + Pub/Sub stack below
 discord_application_id = "…"   # from step 4
 discord_public_key     = "…"   # from step 4
 discord_channel_id     = "…"   # the one channel commands are allowed in
+# Optional: a channel webhook URL so idle self-teardowns (which have no slash
+# command behind them) get announced. Leave blank to let them run silently.
+discord_channel_webhook_url = "…"
 
 interactions_image = "northamerica-northeast2-docker.pkg.dev/PROJECT/onehost/interactions:latest"
 worker_image       = "northamerica-northeast2-docker.pkg.dev/PROJECT/onehost/worker:latest"

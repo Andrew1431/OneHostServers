@@ -23,5 +23,7 @@ default_zone           = "us-central1-a"
 discord_application_id = "000000000000000000"
 discord_public_key     = "your-app-public-key"
 discord_channel_id     = "000000000000000000" # the one channel commands are allowed in
+# Optional: channel webhook so tokenless jobs (idle self-teardown) get announced.
+discord_channel_webhook_url = ""
 interactions_image     = "us-central1-docker.pkg.dev/PROJECT/onehost/interactions:latest"
 worker_image           = "us-central1-docker.pkg.dev/PROJECT/onehost/worker:latest"

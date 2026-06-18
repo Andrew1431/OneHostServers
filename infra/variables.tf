@@ -79,6 +79,13 @@ variable "discord_channel_id" {
   description = "If set, commands are only accepted from this channel id (defense-in-depth)."
 }
 
+variable "discord_channel_webhook_url" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = "Channel webhook the worker posts to for jobs with no interaction (idle self-teardown, future reconcile sweep / nag). Empty = those jobs run silently."
+}
+
 variable "interactions_image" {
   type        = string
   default     = ""

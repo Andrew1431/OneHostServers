@@ -11,11 +11,17 @@
  * (see IDEAS.md "Idle self-teardown").
  */
 
-/** Carries the originating Discord interaction so the worker can edit its reply. */
+/**
+ * `interactionToken` ties a job back to a waiting Discord reply so the worker can
+ * edit it in place. It is **optional**: jobs that originate off-Discord — an idle
+ * VM's self-teardown signal (a plain `{kind:'stop',id}`), or a future reconcile
+ * sweep / long-running-server nag — carry no token, and the worker routes their
+ * result to the channel webhook instead (see apps/worker `notify`).
+ */
 export type Job =
-  | { kind: 'start'; id: string; interactionToken: string }
-  | { kind: 'stop'; id: string; interactionToken: string }
-  | { kind: 'list'; interactionToken: string };
+  | { kind: 'start'; id: string; interactionToken?: string }
+  | { kind: 'stop'; id: string; interactionToken?: string }
+  | { kind: 'list'; interactionToken?: string };
 
 export interface JobPublisher {
   publish(job: Job): Promise<void>;

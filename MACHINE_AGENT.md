@@ -162,20 +162,18 @@ The `count_players` probe is the only game-specific part:
 
 The signal → teardown path **works end-to-end** (verified): a VM publishes
 `{kind:stop,id}`, the push subscription delivers it, and the worker runs
-`provider.stop` (ACPI → snapshot → delete). Remaining rough edges:
+`provider.stop` (ACPI → snapshot → delete). Idle stops now also **notify** —
+`Job.interactionToken` is optional, and the worker posts tokenless results to the
+channel webhook (`DISCORD_CHANNEL_WEBHOOK_URL`) instead of editing a Discord reply
+— and the worker passes `allowAlreadyStopped`, so an idle stop racing a manual one
+(or a Pub/Sub redelivery) reads as success rather than an error. Remaining rough
+edges:
 
-- **No notify on idle stops:** an idle stop has no Discord `interactionToken`, so
-  the worker's reply-edit is a silent no-op (the stop still happens). A
-  channel-webhook notify path would surface idle teardowns.
 - **No authz/validation on the job body:** `parsePushBody` casts without checking,
   and the worker acts on whatever `id` arrives. Any principal that can publish to
   `onehost-jobs` can stop *any* server — so a compromised game box could stop
   others'. Per-server authz (bind the VM's SA/message to its own id) is the
   hardening.
-- **Idempotency:** an idle stop may race a manual one. The worker should call
-  `provider.stop(id, { allowAlreadyStopped: true })` so "already gone" is success,
-  not an error. (The provider supports the flag; the worker's stop branch doesn't
-  pass it yet.)
 - **Lost signal:** the publish is fire-and-forget (SHORTCUTS #6). A dropped
   message = a VM that bills forever; a control-plane reconcile sweep (Cloud
   Scheduler) is the planned backstop.

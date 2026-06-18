@@ -142,6 +142,11 @@ resource "google_cloud_run_v2_service" "worker" {
         name  = "DISCORD_APPLICATION_ID"
         value = var.discord_application_id
       }
+      # Webhook for tokenless jobs (idle self-teardown / future sweep). Empty = silent.
+      env {
+        name  = "DISCORD_CHANNEL_WEBHOOK_URL"
+        value = var.discord_channel_webhook_url
+      }
       env {
         name  = "GCP_PROJECT_ID"
         value = var.project_id
