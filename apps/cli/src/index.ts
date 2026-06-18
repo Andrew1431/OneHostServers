@@ -2,7 +2,7 @@
 import { spawnSync } from 'node:child_process';
 import type { ServerSpec, MachineSpec, ServerSummary } from '@onehost/core';
 import { viewServer } from '@onehost/core';
-import type { StartOptions } from '@onehost/provider-api';
+import type { StartOptions, ReconcileOptions } from '@onehost/provider-api';
 import { GcpServerProvider } from '@onehost/gcp';
 import { loadGcpConfig, writeConfig, envFilePath } from './config.ts';
 import { createInteractively } from './interactive.ts';
@@ -56,6 +56,27 @@ async function main(): Promise<void> {
     }
     case 'list': {
       printServers(await provider.list());
+      break;
+    }
+    case 'sweep': {
+      // Manual trigger of the reconcile sweep (the worker runs this on Cloud
+      // Scheduler's cron). Flags override the ONEHOST_*_UPTIME_HOURS env defaults.
+      const opts = parseSweepOpts(rest);
+      const report = await provider.reconcile(opts);
+      if (report.stopped.length === 0 && report.warned.length === 0) {
+        console.log(
+          opts.maxUptimeHours <= 0
+            ? 'sweep disabled (set --max-uptime <hours> or ONEHOST_MAX_UPTIME_HOURS)'
+            : `✅ nothing past ${opts.maxUptimeHours}h`,
+        );
+        break;
+      }
+      for (const s of report.stopped) {
+        console.log(`⏹  auto-stopped '${s.id}' — up ${Math.floor(s.uptimeHours)}h`);
+      }
+      for (const s of report.warned) {
+        console.log(`⚠️  '${s.id}' up ${Math.floor(s.uptimeHours)}h (flagged)`);
+      }
       break;
     }
     case 'status': {
@@ -157,6 +178,26 @@ function parseStartOpts(args: string[]): StartOptions {
   return opts;
 }
 
+/** Sweep thresholds: flags win, else the ONEHOST_*_UPTIME_HOURS env, else off. */
+function parseSweepOpts(args: string[]): ReconcileOptions {
+  const opts: ReconcileOptions = {
+    maxUptimeHours: Number(process.env.ONEHOST_MAX_UPTIME_HOURS ?? 0),
+    autoStopUptimeHours: Number(process.env.ONEHOST_AUTOSTOP_UPTIME_HOURS ?? 0),
+  };
+  for (let i = 0; i < args.length; i += 2) {
+    const key = args[i];
+    const value = args[i + 1];
+    if (value === undefined) break;
+    if (key === '--max-uptime') opts.maxUptimeHours = Number(value);
+    else if (key === '--autostop') opts.autoStopUptimeHours = Number(value);
+    else return fail(`unknown flag: ${key}`);
+  }
+  if (Number.isNaN(opts.maxUptimeHours) || Number.isNaN(opts.autoStopUptimeHours ?? 0)) {
+    return fail('--max-uptime / --autostop need a number of hours');
+  }
+  return opts;
+}
+
 function buildSpec(id: string, flags: Flags): ServerSpec {
   const machine: MachineSpec = {
     vcpus: flags.vcpus,
@@ -236,6 +277,7 @@ function usage(): void {
       '  status <id>',
       '  ssh <id> [-- <remote command>]                               # gcloud compute ssh into it',
       '  list                                                         # all servers, all zones',
+      '  sweep [--max-uptime <h>] [--autostop <h>]                    # flag/auto-stop long-running servers',
       '  destroy <id>',
       '  config --project <id> [--zone <zone>] [--keep-snapshots 3]   # save to .env once',
       '',

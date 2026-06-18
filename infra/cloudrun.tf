@@ -25,6 +25,12 @@ data "google_project" "this" {}
 locals {
   # enable_bot implies the control plane; enable_control_plane stands it up alone.
   control_plane = var.enable_control_plane || var.enable_bot
+  # The reconcile-sweep cron only exists when the control plane is up and a ceiling
+  # is set — a 0-hour ceiling means the sweep would no-op, so skip the scheduler.
+  sweep_enabled = local.control_plane && var.max_uptime_hours > 0
+  # Scheduler isn't available in every region; fall back to var.region but let it
+  # be overridden when the region isn't a Scheduler location (e.g. northeast2).
+  sweep_location = var.sweep_location != "" ? var.sweep_location : var.region
 }
 
 resource "google_project_service" "run" {
@@ -164,6 +170,15 @@ resource "google_cloud_run_v2_service" "worker" {
         name  = "GCP_GAME_VM_SA"
         value = google_service_account.game_vm[0].email
       }
+      # Reconcile-sweep thresholds (read when a {"kind":"sweep"} job arrives).
+      env {
+        name  = "ONEHOST_MAX_UPTIME_HOURS"
+        value = tostring(var.max_uptime_hours)
+      }
+      env {
+        name  = "ONEHOST_AUTOSTOP_UPTIME_HOURS"
+        value = tostring(var.autostop_uptime_hours)
+      }
     }
   }
 }
@@ -193,6 +208,34 @@ resource "google_pubsub_subscription" "jobs_to_worker" {
   }
 
   depends_on = [google_service_account_iam_member.pubsub_token_creator]
+}
+
+# --- Reconcile sweep: Cloud Scheduler -> topic -> worker --------------------
+# A cron publishes {"kind":"sweep"} onto the same jobs topic; the existing push
+# subscription delivers it to the worker, which flags / auto-stops servers up
+# past the ceiling (long-running-server nag + lost-idle-signal backstop). Reuses
+# the whole Pub/Sub path — no new ingress or auth. Only created when the control
+# plane is on AND a ceiling is set; same-project Pub/Sub targets need no extra IAM.
+
+resource "google_project_service" "cloudscheduler" {
+  count              = local.sweep_enabled ? 1 : 0
+  service            = "cloudscheduler.googleapis.com"
+  disable_on_destroy = false
+}
+
+resource "google_cloud_scheduler_job" "sweep" {
+  count     = local.sweep_enabled ? 1 : 0
+  name      = "onehost-sweep"
+  region    = local.sweep_location
+  schedule  = var.sweep_schedule
+  time_zone = "Etc/UTC"
+
+  pubsub_target {
+    topic_name = google_pubsub_topic.jobs[0].id
+    data       = base64encode(jsonencode({ kind = "sweep" }))
+  }
+
+  depends_on = [google_project_service.cloudscheduler]
 }
 
 # --- interactions: public (Discord calls it; signature verification is the gate) ---

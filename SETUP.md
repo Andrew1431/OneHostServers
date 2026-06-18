@@ -109,9 +109,17 @@ enable_bot             = true  # turns on the Cloud Run + Pub/Sub stack below
 discord_application_id = "…"   # from step 4
 discord_public_key     = "…"   # from step 4
 discord_channel_id     = "…"   # the one channel commands are allowed in
-# Optional: a channel webhook URL so idle self-teardowns (which have no slash
-# command behind them) get announced. Leave blank to let them run silently.
+# Optional: a channel webhook URL so idle self-teardowns + the long-running-server
+# sweep (no slash command behind them) get announced. Blank = they run silently.
 discord_channel_webhook_url = "…"
+
+# Optional: long-running-server sweep (Cloud Scheduler → worker). 0 = off (no
+# scheduler created). Auto-stop is opt-in and reuses the graceful stop.
+max_uptime_hours      = 0   # warn once a server is up this many hours
+autostop_uptime_hours = 0   # also auto-stop at this many hours (0 = warn only)
+# sweep_location = "northamerica-northeast1"  # only if var.region has no Cloud
+#   Scheduler (e.g. northamerica-northeast2 / Toronto); it just publishes to the
+#   global topic, so it need not match your compute region.
 
 interactions_image = "northamerica-northeast2-docker.pkg.dev/PROJECT/onehost/interactions:latest"
 worker_image       = "northamerica-northeast2-docker.pkg.dev/PROJECT/onehost/worker:latest"

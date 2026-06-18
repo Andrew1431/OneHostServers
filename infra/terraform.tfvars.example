@@ -23,7 +23,15 @@ default_zone           = "us-central1-a"
 discord_application_id = "000000000000000000"
 discord_public_key     = "your-app-public-key"
 discord_channel_id     = "000000000000000000" # the one channel commands are allowed in
-# Optional: channel webhook so tokenless jobs (idle self-teardown) get announced.
+# Optional: channel webhook so tokenless jobs (idle self-teardown, sweep) get announced.
 discord_channel_webhook_url = ""
+
+# Reconcile sweep (long-running-server nag + lost-idle-signal backstop). Leave
+# max_uptime_hours = 0 to not create the scheduler at all.
+max_uptime_hours      = 0           # warn once a server is up this many hours (0 = off)
+autostop_uptime_hours = 0           # also auto-stop at this many hours (0 = warn only)
+# sweep_schedule      = "*/15 * * * *"  # cron (UTC); default every 15 min
+# sweep_location      = ""               # set if region lacks Cloud Scheduler
+#                                        # (e.g. northamerica-northeast2 → use northeast1)
 interactions_image     = "us-central1-docker.pkg.dev/PROJECT/onehost/interactions:latest"
 worker_image           = "us-central1-docker.pkg.dev/PROJECT/onehost/worker:latest"

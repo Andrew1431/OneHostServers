@@ -63,6 +63,18 @@ export interface RunningServer {
   address: string;
 }
 
+/**
+ * A RUNNING server the reconcile sweep flagged for being up too long — the
+ * lost-idle-signal backstop / long-running-server nag (see IDEAS.md).
+ */
+export interface StaleServer {
+  id: ServerId;
+  /** Zone the instance runs in. */
+  zone?: string;
+  /** Hours since the current run started (lastStart, else creation). */
+  uptimeHours: number;
+}
+
 /** One row in a `list` view: a server's reality across all zones, no DB needed. */
 export interface ServerSummary {
   id: ServerId;

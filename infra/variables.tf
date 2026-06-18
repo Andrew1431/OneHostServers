@@ -61,6 +61,35 @@ variable "default_zone" {
   description = "Zone the worker provisions into by default. Must be inside var.region."
 }
 
+# --- Reconcile sweep (long-running-server nag + lost-idle-signal backstop) ---
+# Cloud Scheduler publishes a {"kind":"sweep"} job on a cron; the worker flags
+# (and optionally auto-stops) any RUNNING server up past the ceiling. The
+# scheduler is only created when the control plane is on AND max_uptime_hours > 0.
+
+variable "max_uptime_hours" {
+  type        = number
+  default     = 0
+  description = "Warn once a RUNNING server has been up this many hours. 0 disables the sweep entirely (no scheduler created)."
+}
+
+variable "autostop_uptime_hours" {
+  type        = number
+  default     = 0
+  description = "Also auto-stop a server once up this many hours. 0 (or below max_uptime_hours) = warn only, never auto-stop."
+}
+
+variable "sweep_schedule" {
+  type        = string
+  default     = "*/15 * * * *"
+  description = "Cron for the reconcile sweep (unix-cron, scheduler's timezone is UTC by default)."
+}
+
+variable "sweep_location" {
+  type        = string
+  default     = ""
+  description = "Cloud Scheduler location for the sweep cron. Scheduler isn't in every region (e.g. NOT northamerica-northeast2) — set a supported nearby location here when var.region isn't one (it only publishes to the global topic, so it need not match). Empty = use var.region."
+}
+
 variable "discord_application_id" {
   type        = string
   default     = ""

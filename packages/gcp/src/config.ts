@@ -34,6 +34,14 @@ export const SERVER_LABEL = 'onehost-server';
 export const MACHINE_LABEL = 'onehost-machine';
 export const DISKTYPE_LABEL = 'onehost-disktype';
 
+/**
+ * Dedup marker the reconcile sweep stamps (epoch seconds) on an instance once it
+ * has warned about that instance's uptime, so a 15-min sweep doesn't re-alert
+ * every pass. Lives on the instance, so stop (deletes it) / start (fresh
+ * instance) clear it naturally — each run re-arms. (SHORTCUTS #6 backstop.)
+ */
+export const NAGGED_LABEL = 'onehost-nagged-at';
+
 /** Keep the latest N snapshots per server after each stop; prune older ones. */
 export const DEFAULT_SNAPSHOT_KEEP = 3;
 

@@ -21,7 +21,10 @@
 export type Job =
   | { kind: 'start'; id: string; interactionToken?: string }
   | { kind: 'stop'; id: string; interactionToken?: string }
-  | { kind: 'list'; interactionToken?: string };
+  | { kind: 'list'; interactionToken?: string }
+  // Reconcile sweep — published by Cloud Scheduler on a cron, never by Discord, so
+  // it carries no token; the worker routes its result to the channel webhook.
+  | { kind: 'sweep'; interactionToken?: string };
 
 export interface JobPublisher {
   publish(job: Job): Promise<void>;

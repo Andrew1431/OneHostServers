@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { ServerId, ServerState, ServerSummary } from '@onehost/core';
-import type { ServerProvider } from '@onehost/provider-api';
+import type { ServerProvider, ReconcileReport } from '@onehost/provider-api';
 import { STATE_ICON, describeMachine, viewServer } from '@onehost/core';
 import { GcpServerProvider, configFromEnv } from '@onehost/gcp';
 import { parsePushBody, type Job } from '@onehost/jobs';
@@ -26,9 +26,15 @@ const DISCORD_API = 'https://discord.com/api/v10';
 const PUSH_TOKEN = process.env.PUBSUB_PUSH_TOKEN ?? '';
 /**
  * Channel webhook for jobs with no interaction to edit (idle self-teardown, and
- * later the reconcile sweep / long-running nag). Empty = those jobs run silently.
+ * the reconcile sweep / long-running nag). Empty = those jobs run silently.
  */
 const CHANNEL_WEBHOOK_URL = process.env.DISCORD_CHANNEL_WEBHOOK_URL ?? '';
+/**
+ * Reconcile-sweep thresholds (hours). `MAX_UPTIME` <= 0 disables the sweep;
+ * `AUTOSTOP_UPTIME` <= 0 (or below MAX_UPTIME) means warn-only, never auto-stop.
+ */
+const MAX_UPTIME_HOURS = Number(process.env.ONEHOST_MAX_UPTIME_HOURS ?? 0);
+const AUTOSTOP_UPTIME_HOURS = Number(process.env.ONEHOST_AUTOSTOP_UPTIME_HOURS ?? 0);
 
 /** A subset of the Discord embed object — enough to render rich status replies. */
 interface Embed {
@@ -90,9 +96,22 @@ export async function handleJob(deps: WorkerDeps, job: Job): Promise<void> {
         await deps.notify(job, { embeds: [listEmbed(servers)] });
         break;
       }
+      case 'sweep': {
+        const report = await deps.provider.reconcile({
+          maxUptimeHours: MAX_UPTIME_HOURS,
+          autoStopUptimeHours: AUTOSTOP_UPTIME_HOURS,
+        });
+        // Stay quiet on an empty sweep — only speak up when something crossed the
+        // line, so a 15-min cron doesn't post "nothing to do" all day.
+        if (report.warned.length || report.stopped.length) {
+          await deps.notify(job, { embeds: [sweepEmbed(report)] });
+        }
+        break;
+      }
     }
   } catch (err) {
-    const target = job.kind === 'list' ? 'servers' : job.id;
+    const target =
+      job.kind === 'list' ? 'servers' : job.kind === 'sweep' ? 'reconcile sweep' : job.id;
     await deps.notify(job, {
       embeds: [
         {
@@ -162,6 +181,32 @@ async function notify(job: Job, message: DiscordMessage): Promise<void> {
   } else {
     await postWebhook(message);
   }
+}
+
+/**
+ * Render a reconcile-sweep result: which long-running servers were auto-stopped
+ * and which were merely flagged. Only built when at least one server crossed the
+ * uptime ceiling (see handleJob), so it's never an empty "all clear" post.
+ */
+function sweepEmbed(report: ReconcileReport): Embed {
+  const fields: Embed['fields'] = [];
+  for (const s of report.stopped) {
+    fields.push({
+      name: `${STATE_ICON.STOPPED} ${s.id} auto-stopped`,
+      value: `Up ${Math.floor(s.uptimeHours)}h — snapshotted + deleted to stop the bleed.`,
+    });
+  }
+  for (const s of report.warned) {
+    fields.push({
+      name: `⚠️ ${s.id} still running`,
+      value: `Up ${Math.floor(s.uptimeHours)}h. \`/stop ${s.id}\` when you're done.`,
+    });
+  }
+  return {
+    title: 'Long-running server sweep',
+    color: report.stopped.length ? STATE_COLOR.STOPPED : STATE_COLOR.STARTING,
+    fields,
+  };
 }
 
 /**

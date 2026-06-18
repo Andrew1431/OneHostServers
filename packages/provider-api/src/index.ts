@@ -4,6 +4,7 @@ import type {
   ServerStatus,
   ServerSummary,
   RunningServer,
+  StaleServer,
 } from '@onehost/core';
 
 /**
@@ -40,6 +41,27 @@ export interface StopOptions {
   allowAlreadyStopped?: boolean;
 }
 
+/**
+ * Thresholds for {@link ServerProvider.reconcile}. Uptime-driven (idleness isn't
+ * observable off-box), so this is both the long-running-server nag and the
+ * lost-idle-signal backstop: a VM whose self-stop signal was dropped eventually
+ * crosses the uptime ceiling and gets caught.
+ */
+export interface ReconcileOptions {
+  /** Flag a RUNNING server once it has been up at least this many hours. <= 0 disables. */
+  maxUptimeHours: number;
+  /** Also auto-stop once up at least this many hours. Omit / <= 0 = warn only, never stop. */
+  autoStopUptimeHours?: number;
+}
+
+/** What a single reconcile pass did, for the caller to announce. */
+export interface ReconcileReport {
+  /** Newly flagged this pass (a dedup marker suppresses re-warning on later passes). */
+  warned: StaleServer[];
+  /** Auto-stopped this pass because they crossed `autoStopUptimeHours`. */
+  stopped: StaleServer[];
+}
+
 export interface ServerProvider {
   /** First-time provision: fresh disk from a base image + boot. */
   create(spec: ServerSpec): Promise<RunningServer>;
@@ -65,6 +87,14 @@ export interface ServerProvider {
    * of truth, so this needs no database.
    */
   list(): Promise<ServerSummary[]>;
+
+  /**
+   * Sweep RUNNING servers and act on any up past the configured ceiling: flag
+   * (once, deduped) and optionally auto-stop. Backstops a lost idle-stop signal
+   * so a forgotten VM can't bill forever. Returns what it touched, for the
+   * caller to announce (e.g. a channel webhook). See docs/SHORTCUTS.md #6.
+   */
+  reconcile(opts: ReconcileOptions): Promise<ReconcileReport>;
 }
 
 export class ServerNotFoundError extends Error {

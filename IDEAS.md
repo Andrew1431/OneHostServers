@@ -86,41 +86,38 @@ Recently closed: tokenless jobs now notify a channel webhook
 `notify` routes by its presence), and the worker passes `allowAlreadyStopped` so an
 idle/manual stop race (or a Pub/Sub redelivery) reads as success.
 
-Remaining open work (all also tracked in SHORTCUTS #6):
+Remaining open work (also tracked in SHORTCUTS #6):
 
-- **Lost-signal backstop:** the publish is fire-and-forget, so a dropped message =
-  a VM that bills forever. Wants a control-plane **reconcile sweep** (Cloud
-  Scheduler lists RUNNING servers, stops any idle past threshold). Shared with the
-  long-running-server nag below — build the sweep once, serve both. (GCE
-  `max-run-duration` is a cruder hard ceiling.)
 - **No authz on the job body:** any topic publisher can stop any `id`; bind the
   VM's SA/message to its own id.
+
+The **lost-signal backstop** is now built — see "Long-running-server nag" below;
+the same reconcile sweep that nags also catches a VM whose self-stop signal was
+dropped (it eventually crosses the uptime ceiling).
 - **Rejoin race:** player connects between signal and delete — acceptable in v1
   since the container is stopped before signaling (reads as down, user re-starts).
 
-## Long-running-server nag — Discord ping when a VM has been up 8+ hours
+## Long-running-server nag — Discord ping when a VM has been up too long — DONE
 
-A server left RUNNING for hours (someone forgot to `/stop`) burns money. Detect it
-and nudge the channel.
+A server left RUNNING for hours (someone forgot to `/stop`) burns money. Built as a
+**reconcile sweep** that doubles as the idle lost-signal backstop (SHORTCUTS #6).
 
-- **Detection (no agent needed):** a periodic **reconcile sweep** — Cloud Scheduler
-  → a Cloud Run/worker endpoint that runs `instances.list`/aggregatedList for
-  `onehost`-labelled RUNNING VMs and reads each one's `lastStartTimestamp` (fall
-  back to `creationTimestamp`). Uptime = now − that. Past a threshold (8h), notify.
-  This is the same sweep IDEAS.md "Idle self-teardown" wants as a lost-signal
-  backstop and SHORTCUTS #6 references — build once, serve both.
-- **Notify:** these alerts have **no Discord `interactionToken`** (no slash command
-  behind them), so the worker's `editOriginal` path doesn't apply. Post to a
-  **channel webhook** (store its URL as a secret/env) instead — same gap the idle
-  path has, so a `source` discriminator + webhook-notify branch on the `Job`/worker
-  unblocks both.
-- **Don't spam:** ping once per crossing, not every sweep. Cheapest is a dedup
-  marker (e.g. stamp an `onehost-nagged-at` label on the instance once pinged;
-  clear it on stop/start) so a 15-min sweep doesn't re-alert hourly.
-- **Threshold config:** `ONEHOST_MAX_UPTIME_HOURS` (0 = off), mirroring
-  `ONEHOST_SNAPSHOT_KEEP`. Optionally escalate (warn at 8h, auto-stop at 24h) —
-  but auto-stop reuses the graceful `provider.stop`, so it's a small step from the
-  nag once the sweep + webhook exist.
+- **Detection:** Cloud Scheduler publishes `{kind:sweep}` onto the `onehost-jobs`
+  topic on a cron (`sweep_schedule`, default every 15 min); the existing push
+  subscription delivers it to the worker, which calls `provider.reconcile`. That
+  reads `lastStartTimestamp` (else `creationTimestamp`) for each `onehost`-labelled
+  RUNNING VM and acts on any past `ONEHOST_MAX_UPTIME_HOURS`. No new endpoint/auth —
+  reuses the whole Pub/Sub path. (`packages/gcp/src/provider.ts` `reconcile`,
+  `infra/cloudrun.tf` `google_cloud_scheduler_job.sweep`.)
+- **Notify:** tokenless, so it posts to the channel webhook
+  (`DISCORD_CHANNEL_WEBHOOK_URL`) — the same path the idle teardown uses.
+- **Don't spam:** the sweep stamps an `onehost-nagged-at` label once it warns about
+  an instance; later passes skip it. Stop/start clears it naturally (the instance
+  is deleted/recreated), so each run re-arms.
+- **Escalation:** `ONEHOST_AUTOSTOP_UPTIME_HOURS` (0 / below max = warn only) makes
+  the sweep auto-stop via the graceful `provider.stop` once a server is up that long.
+- **Remaining nice-to-haves:** per-server thresholds (vs the single global env);
+  GCE `max-run-duration` as a cruder hard ceiling for belt-and-suspenders.
 
 ## Stable address — a fixed IP or domain instead of a random one each start
 

@@ -174,9 +174,12 @@ edges:
   `onehost-jobs` can stop *any* server — so a compromised game box could stop
   others'. Per-server authz (bind the VM's SA/message to its own id) is the
   hardening.
-- **Lost signal:** the publish is fire-and-forget (SHORTCUTS #6). A dropped
-  message = a VM that bills forever; a control-plane reconcile sweep (Cloud
-  Scheduler) is the planned backstop.
+- **Lost signal (backstop now built):** the publish is fire-and-forget (SHORTCUTS
+  #6), so a dropped message could leave a VM billing forever. A Cloud Scheduler
+  reconcile sweep (`{kind:sweep}` → worker `provider.reconcile`) now catches it:
+  any RUNNING server past `ONEHOST_MAX_UPTIME_HOURS` is flagged (and optionally
+  auto-stopped via `ONEHOST_AUTOSTOP_UPTIME_HOURS`), regardless of whether its idle
+  signal ever arrived.
 
 ## Quick checklist for a new VM
 

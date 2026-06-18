@@ -14,17 +14,21 @@ import type {
   ServerState,
   ServerSummary,
   RunningServer,
+  StaleServer,
 } from '@onehost/core';
 import {
   type ServerProvider,
   type StartOptions,
   type StopOptions,
+  type ReconcileOptions,
+  type ReconcileReport,
   ServerNotFoundError,
 } from '@onehost/provider-api';
 import {
   SERVER_LABEL,
   MACHINE_LABEL,
   DISKTYPE_LABEL,
+  NAGGED_LABEL,
   DEFAULT_DISK_TYPE,
   DEFAULT_MACHINE_TYPE,
   DEFAULT_SNAPSHOT_KEEP,
@@ -370,6 +374,52 @@ export class GcpServerProvider implements ServerProvider {
     return [...summaries.values()].sort((a, b) => a.id.localeCompare(b.id));
   }
 
+  async reconcile(opts: ReconcileOptions): Promise<ReconcileReport> {
+    const report: ReconcileReport = { warned: [], stopped: [] };
+    if (opts.maxUptimeHours <= 0) return report; // disabled
+
+    const { projectId } = this.cfg;
+    const now = Date.now();
+    // Auto-stop only when a ceiling is set *and* sane (>= the warn threshold);
+    // otherwise we'd stop before ever warning.
+    const autoStopAt =
+      opts.autoStopUptimeHours && opts.autoStopUptimeHours >= opts.maxUptimeHours
+        ? opts.autoStopUptimeHours
+        : undefined;
+
+    // One pass over every live OneHost instance, across all zones.
+    const aggregated = this.instances.aggregatedListAsync({ project: projectId });
+    for await (const [scope, scoped] of aggregated) {
+      for (const inst of scoped.instances ?? []) {
+        const id = inst.labels?.[SERVER_LABEL];
+        if (!id || inst.status !== 'RUNNING') continue;
+
+        // Uptime from when this run started; creation time is the fallback for
+        // an instance that has never been explicitly stopped/started.
+        const started = inst.lastStartTimestamp ?? inst.creationTimestamp ?? undefined;
+        if (!started) continue;
+        const uptimeHours = (now - new Date(started).getTime()) / 3_600_000;
+        if (uptimeHours < opts.maxUptimeHours) continue;
+
+        const zone = scope.replace(/^zones\//, '');
+        const stale: StaleServer = { id, zone, uptimeHours };
+
+        if (autoStopAt !== undefined && uptimeHours >= autoStopAt) {
+          // Graceful stop (ACPI → snapshot → delete); idempotent in case a manual
+          // stop is racing this sweep.
+          await this.stop(id, { allowAlreadyStopped: true });
+          report.stopped.push(stale);
+        } else if (inst.labels?.[NAGGED_LABEL] === undefined) {
+          // First time over the line this run — warn once, then mark so later
+          // passes stay quiet until the next stop/start clears the label.
+          await this.markNagged(id, zone, inst.labels ?? {}, inst.labelFingerprint ?? undefined);
+          report.warned.push(stale);
+        }
+      }
+    }
+    return report;
+  }
+
   // --- helpers ---------------------------------------------------------------
 
   /**
@@ -413,6 +463,32 @@ export class GcpServerProvider implements ServerProvider {
     }
     others.sort();
     return [preferred, ...others];
+  }
+
+  /**
+   * Stamp the dedup marker so the sweep won't re-warn about this instance until
+   * its next stop/start. `setLabels` needs the current label fingerprint, which
+   * the sweep already has from the aggregated list — so no extra GET.
+   */
+  private async markNagged(
+    id: ServerId,
+    zone: string,
+    currentLabels: Record<string, string>,
+    labelFingerprint: string | undefined,
+  ): Promise<void> {
+    const { projectId } = this.cfg;
+    const [resp] = await this.instances.setLabels({
+      project: projectId,
+      zone,
+      instance: instanceName(id),
+      instancesSetLabelsRequestResource: {
+        labels: { ...currentLabels, [NAGGED_LABEL]: String(Math.floor(Date.now() / 1000)) },
+        // GCP requires the current fingerprint for optimistic concurrency; a live
+        // instance always has one. `null` only to satisfy the string|null type.
+        labelFingerprint: labelFingerprint ?? null,
+      },
+    });
+    await waitZonal(this.zoneOps, projectId, zone, resp);
   }
 
   /** Best-effort disk delete used to compensate a failed start; ignores not-found. */

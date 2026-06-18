@@ -30,10 +30,11 @@ packages/
 apps/
   cli          drive the GCP provider directly — the hands-on playground
   interactions Discord HTTP-interactions endpoint: verify + AuthZ + enqueue   [Cloud Run]
-  worker       consume Job -> drive provider -> edit the Discord reply         [Cloud Run]
-  agent        runs ON the game VM: idle-poll -> request stop
-infra/         Terraform: network + firewall (main.tf) and the bot (cloudrun.tf)
+  worker       consume Job -> drive provider -> reply (Discord edit or webhook) [Cloud Run]
+infra/         Terraform: network + firewall (main.tf); control plane + the
+               reconcile-sweep cron (cloudrun.tf)
 SETUP.md           fresh clone -> working bot, step by step
+MACHINE_AGENT.md   on-VM contract: graceful stop + the optional idle agent
 docs/SHORTCUTS.md  every deliberate v1 shortcut + its refactor note
 ```
 
