@@ -78,6 +78,27 @@ export class GcpServerProvider implements ServerProvider {
     ];
   }
 
+  /**
+   * Per-instance identity fields shared by create + start:
+   *  - `metadata.onehost-server-id` so an on-box agent can learn its own id from
+   *    the metadata server (MACHINE_AGENT.md checklist #4) — no baked-in config.
+   *  - a `serviceAccounts` block iff a game-VM SA is configured, so an idle VM can
+   *    publish its own stop. Scoped to pubsub only; the SA's IAM is the real gate.
+   */
+  private identity(serverId: ServerId) {
+    const sa = this.cfg.gameVmServiceAccount;
+    return {
+      metadata: { items: [{ key: 'onehost-server-id', value: serverId }] },
+      ...(sa
+        ? {
+            serviceAccounts: [
+              { email: sa, scopes: ['https://www.googleapis.com/auth/pubsub'] },
+            ],
+          }
+        : {}),
+    };
+  }
+
   async create(spec: ServerSpec): Promise<RunningServer> {
     const { projectId } = this.cfg;
     const name = instanceName(spec.id);
@@ -94,6 +115,7 @@ export class GcpServerProvider implements ServerProvider {
           name,
           machineType: `zones/${zone}/machineTypes/${machineType}`,
           tags: { items: [this.cfg.networkTag] },
+          ...this.identity(spec.id),
           labels: {
             [SERVER_LABEL]: name,
             [MACHINE_LABEL]: machineType,
@@ -146,6 +168,10 @@ export class GcpServerProvider implements ServerProvider {
             name: diskName(id),
             sourceSnapshot: `projects/${projectId}/global/snapshots/${snapshot.name}`,
             type: `zones/${zone}/diskTypes/${diskType}`,
+            // Optional grow. Omitting it restores at the snapshot's size; GCP
+            // rejects a value smaller than the snapshot. The guest resizes the
+            // root fs to fill the disk on boot, so no manual growpart needed.
+            ...(opts.diskSizeGb ? { sizeGb: String(opts.diskSizeGb) } : {}),
           },
         });
         await waitZonal(this.zoneOps, projectId, zone, diskResp);
@@ -159,6 +185,7 @@ export class GcpServerProvider implements ServerProvider {
             name,
             machineType: `zones/${zone}/machineTypes/${machineType}`,
             tags: { items: [this.cfg.networkTag] },
+            ...this.identity(id),
             labels: {
               [SERVER_LABEL]: name,
               [MACHINE_LABEL]: machineType,

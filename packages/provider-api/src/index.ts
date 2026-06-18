@@ -22,6 +22,12 @@ import type {
 export interface StartOptions {
   machineType?: string;
   diskType?: string;
+  /**
+   * Grow the restored boot disk to this many GB. Must be >= the snapshot's
+   * size (GCP rejects shrinking). Omit to keep whatever size the snapshot has.
+   * The GCE guest auto-grows the root filesystem to fill the disk on boot.
+   */
+  diskSizeGb?: number;
 }
 
 /** One-off overrides when stopping. */

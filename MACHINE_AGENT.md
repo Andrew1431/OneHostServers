@@ -102,9 +102,8 @@ itself** — `instances.delete` would kill the process mid-sequence and it'd nee
 broad GCP creds on an untrusted box. So the agent only **signals**; the off-box
 worker runs the same `provider.stop` above (which already quiesces via ACPI).
 
-**This does not need Node.** `apps/agent/src/index.ts` is the reference logic, but
-on a real VM it's a few lines of bash on a systemd timer. GCE images ship with
-`gcloud` and a metadata server, so signalling is free:
+**This does not need Node** — it's a few lines of bash on a systemd timer. GCE
+images ship with `gcloud` and a metadata server, so signalling is free:
 
 ```bash
 #!/usr/bin/env bash

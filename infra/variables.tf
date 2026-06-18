@@ -28,22 +28,31 @@ variable "game_tcp_ports" {
 
 variable "game_udp_ports" {
   type        = list(string)
-  default     = ["2456-2458"] # Valheim default range
+  default     = ["2456-2458", "15637"] # Valheim range; Enshrouded query/game port
   description = "UDP ports opened on game VMs."
 }
 
-# --- Discord control plane (Cloud Run + Pub/Sub) ---------------------------
-# These power the Discord bot, which is OPT-IN: leave enable_bot = false and the
-# base network/firewall apply on their own (the CLI hands-on path needs nothing
-# here). Flip it on and provide the values below to stand up the bot. None are
-# real secrets at runtime: the public key is public, and the worker edits replies
-# with the per-request interaction token (the bot token is only used by the
-# one-off `register` script, never deployed).
+# --- Control plane (Cloud Run worker + Pub/Sub) ----------------------------
+# The control plane is the job topic + worker that drive start/stop off-box. It's
+# what makes idle self-teardown possible (a game VM publishes a stop; the worker
+# snapshots + deletes it) — independent of Discord. The Discord bot is just one
+# front-end onto the same topic. Both are OPT-IN: with everything off, the base
+# network/firewall still apply and the pure-CLI hands-on path needs nothing here.
+#
+# enable_bot implies the control plane (the bot can't work without it). Set
+# enable_control_plane = true on its own for headless idle-teardown (CLI users who
+# want a VM to stop itself when empty) without standing up Discord.
+
+variable "enable_control_plane" {
+  type        = bool
+  default     = false
+  description = "Stand up the job worker + Pub/Sub topic (enables idle self-teardown). Needs worker_image. Implied by enable_bot."
+}
 
 variable "enable_bot" {
   type        = bool
   default     = false
-  description = "Stand up the Discord bot (Cloud Run + Pub/Sub). Needs the discord_* + *_image vars."
+  description = "Stand up the Discord bot front-end (interactions endpoint). Needs the discord_* + interactions_image vars. Implies enable_control_plane."
 }
 
 variable "default_zone" {

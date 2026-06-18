@@ -148,7 +148,11 @@ function parseStartOpts(args: string[]): StartOptions {
     if (value === undefined) break;
     if (key === '--machine') opts.machineType = value;
     else if (key === '--disk-type') opts.diskType = value;
-    else return fail(`unknown flag: ${key}`);
+    else if (key === '--disk') {
+      const gb = Number(value);
+      if (!Number.isInteger(gb) || gb <= 0) return fail(`--disk needs a positive integer (GB)`);
+      opts.diskSizeGb = gb;
+    } else return fail(`unknown flag: ${key}`);
   }
   return opts;
 }
@@ -227,6 +231,7 @@ function usage(): void {
       '              [--disk-type pd-balanced] [--machine n2-standard-4] [--port tcp:25565]',
       '              [-i|--interactive]                               # force the picker',
       '  start <id>  [--disk-type pd-ssd] [--machine c2-standard-4]   # override to upgrade',
+      '              [--disk 40]                                      # grow boot disk (GB, >= snapshot)',
       '  stop <id>',
       '  status <id>',
       '  ssh <id> [-- <remote command>]                               # gcloud compute ssh into it',

@@ -8,6 +8,13 @@ export interface GcpConfig {
   /** Network tag the Terraform firewall rules target. */
   networkTag: string;
   /**
+   * Service account email attached to game VMs. Its only IAM is
+   * `roles/pubsub.publisher` on the jobs topic, so an idle VM can signal its own
+   * stop without holding any compute/disk power (MACHINE_AGENT.md idle path).
+   * Omit (no SA attached) to keep VMs unable to signal — operator stop still works.
+   */
+  gameVmServiceAccount?: string;
+  /**
    * How many of a server's most-recent snapshots to keep after each stop.
    * Older ones are pruned. Omit to use DEFAULT_SNAPSHOT_KEEP; <= 0 keeps all.
    * Config-driven (not read from env here) so a future per-server/GUI setting
@@ -62,6 +69,7 @@ export function configFromEnv(): GcpConfig {
     networkTag: process.env.GCP_NETWORK_TAG ?? DEFAULT_NETWORK_TAG,
     // Omit when unset so the provider falls back to its own default.
     ...(snapshotKeep === undefined ? {} : { snapshotKeep }),
+    ...(process.env.GCP_GAME_VM_SA ? { gameVmServiceAccount: process.env.GCP_GAME_VM_SA } : {}),
   };
 }
 

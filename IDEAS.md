@@ -76,7 +76,8 @@ have stock — operational cost is low enough that a slightly different machine 
 
 ## Idle self-teardown — how an instance triggers its own stop
 
-The agent runs ON the game VM and detects idleness (`apps/agent`). The open
+The agent runs ON the game VM and detects idleness (a bash `idle-check.sh` on an
+`onehost-idle.timer` — see MACHINE_AGENT.md; not a Node service). The open
 question is how that turns into a snapshot + disk/VM delete. Settled shape: the
 VM **cannot run its own teardown** — `instances.delete` kills the process
 mid-sequence (prune/state/notify never run), it would need compute-admin on an

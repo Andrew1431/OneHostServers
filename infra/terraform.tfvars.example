@@ -8,10 +8,16 @@ ssh_source_ranges = ["0.0.0.0/0"]
 game_tcp_ports = ["25565"]
 game_udp_ports = ["2456-2458"]
 
-# --- Discord bot (Cloud Run + Pub/Sub) ---
-# Opt-in. Leave enable_bot = false to apply just the network + firewall (the CLI
-# hands-on path). To stand up the bot: build + push the images (see SETUP.md),
-# set enable_bot = true, and fill these in.
+# --- Control plane (Cloud Run worker + Pub/Sub) ---
+# Opt-in. Stands up the job worker + topic that drive start/stop off-box — and
+# enables idle self-teardown (a forgotten server stops itself when empty). Worth
+# having even for pure-CLI use; needs worker_image (see SETUP.md). Leave both this
+# and enable_bot = false to apply just the network + firewall.
+enable_control_plane = true
+
+# --- Discord bot (interactions endpoint) ---
+# Opt-in front-end onto the same topic. Implies the control plane above. To stand
+# it up: build + push the images (see SETUP.md), set enable_bot = true, fill these in.
 enable_bot             = true
 default_zone           = "us-central1-a"
 discord_application_id = "000000000000000000"
