@@ -10,6 +10,10 @@
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
     "cli": "pnpm --filter @onehost/cli start",
+    "init": "pnpm --filter @onehost/cli start init",
+    "setup": "node scripts/setup.mjs",
+    "build:images": "node scripts/build-images.mjs",
+    "register": "pnpm --filter @onehost/interactions register",
     "deploy": "node scripts/deploy.mjs",
     "prune-images": "node scripts/prune-images.mjs"
   },

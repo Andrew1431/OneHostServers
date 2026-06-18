@@ -1,11 +1,15 @@
 # OneHost
 
-java -Xmx3G -jar server.jar nogui
-
 On-demand, pay-only-for-what-you-play dedicated game servers you self-host in
 your **own GCP project**. Spin up a VM, install any server software (Minecraft,
 Valheim, Astroneer, …), and when nobody's playing it costs ~pennies — the disk
 is snapshotted and the instance is deleted. Boot it back from a Discord command.
+
+> ⚠️ **Early stages, but functional.** Both vertical slices work end-to-end and
+> the cost model is real, but this is a young project: rough edges, deliberate v1
+> shortcuts (`docs/SHORTCUTS.md`), and breaking changes are expected. Run it in
+> your own project, read what it does before pointing it at anything you care
+> about, and expect to get your hands dirty.
 
 > Status: two working vertical slices. The GCP lifecycle (`@onehost/gcp` +
 > `@onehost/cli`) is the hands-on surface; the Discord bot (`apps/interactions` +
@@ -56,25 +60,26 @@ start  : disk from latest snapshot -> instance
 
 ## Quickstart (GCP hands-on)
 
+This is the pure-CLI lifecycle — no Discord, no Cloud Run. For the full bot
+(end-to-end order: `init` → `setup` → `build:images` → `terraform apply` →
+`register`), follow **`SETUP.md`**.
+
 ```bash
 pnpm install
 
 # 1. Authenticate. Application Default Credentials is what the Node client uses.
 gcloud auth login
 gcloud auth application-default login
-gcloud config set project YOUR_PROJECT_ID
-gcloud services enable compute.googleapis.com
 
-# 2. Network + firewall (opens SSH + game ports on tagged VMs)
-cd infra
-cp terraform.tfvars.example terraform.tfvars   # edit project_id, lock SSH to your IP
-terraform init && terraform apply
-cd ..
+# 2. Configure. Interactively writes the repo-root .env (project/zone) AND
+#    infra/terraform.tfvars (project, region, SSH IP, game ports) — no hand-editing.
+pnpm cli init
 
-# 3. Drive the lifecycle
-export GCP_PROJECT_ID=YOUR_PROJECT_ID
-export GCP_ZONE=us-central1-a
+# 3. Enable the API + stand up the network/firewall (opens SSH + game ports).
+gcloud services enable compute.googleapis.com   # or `pnpm setup` for the full bot stack
+cd infra && terraform init && terraform apply && cd ..
 
+# 4. Drive the lifecycle (reads project/zone from the .env that `init` wrote).
 pnpm cli create mc --vcpus 2 --memory 4096 --disk 20 --port tcp:25565
 # -> prints an IP. SSH in, install your Minecraft server, start it.
 pnpm cli status mc
@@ -83,7 +88,9 @@ pnpm cli start mc       # restores from snapshot
 pnpm cli destroy mc     # deletes everything incl. snapshots
 ```
 
-> Windows PowerShell: use `$env:GCP_PROJECT_ID = "..."` instead of `export`.
+> Prefer not to use the interactive `init`? `cp infra/terraform.tfvars.example
+> infra/terraform.tfvars` and edit it, then `pnpm cli config --project <id>
+> --zone <zone>` to write the `.env` by hand.
 
 ## Cost model
 
@@ -92,5 +99,24 @@ pnpm cli destroy mc     # deletes everything incl. snapshots
 - **Idle**: snapshot storage only (~$0.026/GB-month, incremental) — pennies.
 - **Control plane**: serverless (Cloud Run + Pub/Sub + Firestore), scales to
   zero, within free tiers.
+
+### Idle storage — `northamerica-northeast2` (Toronto)
+
+While a server is stopped you pay only for the snapshot, at the region's standard
+snapshot rate (~$0.026/GB-month). Snapshots are **incremental**, so in practice
+you're billed for *changed* blocks, not the full disk — the table below is the
+worst-case (a full disk's worth), i.e. the ceiling on a month of pure idle.
+
+| Boot disk | Snapshot / month (ceiling) |
+|-----------|----------------------------|
+| 5 GB      | ~$0.13 |
+| 10 GB     | ~$0.26 |
+| 20 GB     | ~$0.52 |
+| 50 GB     | ~$1.30 |
+
+> Rates are for `northamerica-northeast2` and approximate — check the
+> [GCP pricing page](https://cloud.google.com/compute/disks-image-pricing) for
+> your region. Other regions differ; `northamerica-northeast2` is the region
+> OneHost's cost table is priced for (`packages/gcp/src/pricing.ts`).
 
 See `docs/SHORTCUTS.md` for what's intentionally unfinished.

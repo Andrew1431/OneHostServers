@@ -2,8 +2,11 @@
  * Register OneHost's slash commands with Discord. Run once (and again whenever
  * the command set changes):
  *
- *   DISCORD_APPLICATION_ID=… DISCORD_BOT_TOKEN=… DISCORD_GUILD_ID=… \
- *     pnpm --filter @onehost/interactions register
+ *   pnpm register
+ *
+ * Reads DISCORD_APPLICATION_ID / DISCORD_BOT_TOKEN / DISCORD_GUILD_ID from the
+ * repo-root .env (or the environment) — see loadDotEnv below — so nothing has to
+ * be passed on the command line.
  *
  * Guild-scoped commands register instantly (global ones take up to an hour to
  * propagate), so we target a guild. The bot token is needed ONLY here — the

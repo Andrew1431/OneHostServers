@@ -45,29 +45,50 @@ gcloud config set project $PROJECT
 pnpm install
 ```
 
+> **Shortcut:** `pnpm cli init` walks you through this whole file's config
+> interactively — it lists your projects/regions/zones from gcloud and writes both
+> `.env` and `infra/terraform.tfvars`. The steps below are the manual path (and
+> what the Discord bot needs on top of what `init` writes).
+
 ## 2. 🔧 Bootstrap the project
 
 Enable the APIs and create the image registry. (Terraform re-asserts the runtime
-APIs too; these are the ones needed *before* Terraform can run.)
+APIs too; these are the ones needed *before* Terraform can run.) `pnpm setup`
+does both, reading project + region from the `.env` (`pnpm cli config` / `init`
+writes it):
+
+```bash
+pnpm setup
+```
+
+<details><summary>What that runs (manual equivalent)</summary>
 
 ```bash
 gcloud services enable \
   compute.googleapis.com run.googleapis.com pubsub.googleapis.com \
-  artifactregistry.googleapis.com cloudbuild.googleapis.com
+  cloudscheduler.googleapis.com artifactregistry.googleapis.com cloudbuild.googleapis.com
 
 gcloud artifacts repositories create onehost \
   --repository-format=docker --location=$REGION \
   --description="OneHost control-plane images"
 ```
+</details>
 
 ## 3. 📦 Build + push the images
 
 Builds both Cloud Run images in the cloud — no local Docker needed.
 
 ```bash
+pnpm build:images
+```
+
+<details><summary>Manual equivalent</summary>
+
+```bash
 gcloud builds submit --config cloudbuild.yaml \
   --substitutions=_REGION=$REGION .
 ```
+</details>
 
 Re-run this whenever you change `apps/interactions`, `apps/worker`, or any package
 they use. (See [Updating](#updating) for redeploying after a rebuild.)
@@ -150,12 +171,15 @@ finishes, note the **`interactions_url`** output.
 1. Back in the Developer Portal → **General Information** → set **Interactions
    Endpoint URL** to the `interactions_url` from step 6. Discord sends a PING to
    verify; the endpoint answers the handshake, so it saves immediately.
-2. Register the slash commands (needs the Bot Token + Guild ID from step 4):
+2. Register the slash commands. Put the Bot Token + Guild ID from step 4 (and the
+   Application ID) in the repo-root `.env` — `DISCORD_APPLICATION_ID`,
+   `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID` — then just:
 
    ```bash
-   DISCORD_APPLICATION_ID=… DISCORD_BOT_TOKEN=… DISCORD_GUILD_ID=… \
-     pnpm --filter @onehost/interactions register
+   pnpm register
    ```
+
+   (`register` reads them from `.env`; nothing needs to go on the command line.)
 
 3. Lock the app to one channel: **Server Settings → Integrations → OneHost →
    Channels** (and use role permissions for *who* can run it). The
@@ -196,7 +220,7 @@ What you touched decides what you run:
 | You changed… | Run |
 |---|---|
 | **App/package code** (`apps/worker`, `apps/interactions`, or a package they import — e.g. `@onehost/core`) | `pnpm run deploy` |
-| **Slash command shape** (`apps/interactions/src/register.ts`) | `pnpm --filter @onehost/interactions register` |
+| **Slash command shape** (`apps/interactions/src/register.ts`) | `pnpm register` |
 | **Terraform only** (env vars, IAM, ports, `default_zone`) | `terraform apply` |
 | **CLI code** (`apps/cli`, or a package it imports) | nothing to deploy — the CLI runs from source via `tsx` |
 

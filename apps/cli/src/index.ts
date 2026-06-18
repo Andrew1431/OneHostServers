@@ -6,6 +6,7 @@ import type { StartOptions, ReconcileOptions } from '@onehost/provider-api';
 import { GcpServerProvider } from '@onehost/gcp';
 import { loadGcpConfig, writeConfig, envFilePath } from './config.ts';
 import { createInteractively } from './interactive.ts';
+import { runInit } from './init.ts';
 
 /**
  * Bare-bones CLI to drive the GCP provider directly — your hands-on GCP surface
@@ -22,6 +23,7 @@ async function main(): Promise<void> {
   const [command, id, ...rest] = args;
   if (!command || command === 'help') return usage();
   if (command === 'config') return runConfig(args.slice(1));
+  if (command === 'init') return runInit(); // before loadGcpConfig — writes the .env it would read
 
   const cfg = loadGcpConfig();
   const provider = new GcpServerProvider(cfg);
@@ -267,6 +269,7 @@ function usage(): void {
     [
       'onehost <command> <server-id> [flags]',
       '',
+      '  init                                                         # first-run setup: writes .env + terraform.tfvars',
       '  create [<id>]                                                # interactive picker (TTY)',
       '  create <id> [--vcpus 2] [--memory 4096] [--disk 20]         # non-interactive',
       '              [--disk-type pd-balanced] [--machine n2-standard-4] [--port tcp:25565]',

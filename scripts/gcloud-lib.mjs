@@ -53,19 +53,22 @@ const gcloudBin = findGcloud();
 
 /**
  * Run gcloud. `capture: true` returns stdout (string); otherwise output is
- * inherited (streamed live). Node won't spawn a .cmd without a shell
- * (CVE-2024-27980), so on Windows we run a quoted command string through one.
+ * inherited (streamed live). `allowFail: true` returns the exit status instead
+ * of exiting on a non-zero (for idempotent probes like "does this repo exist?").
+ * Node won't spawn a .cmd without a shell (CVE-2024-27980), so on Windows we run
+ * a quoted command string through one.
  */
-export function gcloud(args, { capture = false } = {}) {
+export function gcloud(args, { capture = false, allowFail = false } = {}) {
   if (!capture) console.log(`$ gcloud ${args.join(' ')}`);
   const isCmd = /\.(cmd|bat)$/i.test(gcloudBin);
-  const base = capture
+  const base = capture || allowFail
     ? { cwd: repoRoot, encoding: 'utf8' }
     : { cwd: repoRoot, stdio: 'inherit' };
   const res = isCmd
     ? spawnSync(`"${gcloudBin}" ${args.join(' ')}`, { ...base, shell: true })
     : spawnSync(gcloudBin, args, base);
   if (res.error) fail(`could not run gcloud: ${res.error.message}`);
+  if (allowFail) return res.status ?? 1;
   if (res.status !== 0) {
     if (capture && res.stderr) process.stderr.write(res.stderr);
     fail(`gcloud exited with ${res.status ?? res.signal}`);
