@@ -14,7 +14,7 @@ import { writeConfig } from './config.ts';
  * degrades to a plain text prompt rather than dying. Non-destructive: an existing
  * file is shown and confirmed before it's overwritten.
  *
- * Scope is deliberately the base infra + CLI config (IDEAS.md entry 2). The Discord
+ * Scope is deliberately the base infra + CLI config. The Discord
  * bot / control-plane vars stay commented in the generated tfvars; turn them on by
  * editing the file per SETUP.md once you have a Discord app.
  */

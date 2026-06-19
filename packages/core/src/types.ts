@@ -70,7 +70,7 @@ export interface RunningServer {
 
 /**
  * A RUNNING server the reconcile sweep flagged for being up too long — the
- * lost-idle-signal backstop / long-running-server nag (see IDEAS.md).
+ * lost-idle-signal backstop / long-running-server nag (issue #18).
  */
 export interface StaleServer {
   id: ServerId;

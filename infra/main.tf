@@ -44,4 +44,4 @@ resource "google_compute_firewall" "ssh" {
 # Game ports are now per-server: the provider creates an `onehost-game-<id>` rule
 # targeting that server's own `onehost-srv-<id>` tag, opening only its ports
 # (`pnpm cli create --port …` / `pnpm cli ports …`). No shared game rule here —
-# see SHORTCUTS.md #8 and PER_GAME_PORT_INSTRUCTIONS.md.
+# see docs/PER_GAME_PORTS.md.

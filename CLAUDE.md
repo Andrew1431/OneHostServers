@@ -9,7 +9,7 @@ the disk — it snapshots and restores the whole boot disk.
 - `start`  : disk from latest snapshot → instance
 
 pnpm 9 monorepo, Node ≥20, Turbo. Internal packages run from `src` via `tsx` —
-**no build step** (SHORTCUTS #9); only the two Cloud Run apps get bundled at deploy.
+**no build step** (issue #4); only the two Cloud Run apps get bundled at deploy.
 
 ## Layout
 
@@ -27,9 +27,11 @@ apps/
 infra/         Terraform: network/firewall (main.tf); control plane + reconcile-sweep cron (cloudrun.tf)
 ```
 
-Planning docs (read before starting work): `ROADMAP.md` (priority order),
-`IDEAS.md` (feature sketches), `docs/SHORTCUTS.md` (deliberate v1 cuts). Full
-fresh-clone→working-bot walkthrough: `SETUP.md`.
+Planned work, feature sketches, and deliberate v1 cuts are tracked as
+[GitHub issues](https://github.com/Andrew1431/OneHostServers/issues) (labelled by
+origin/type/priority; `epic` issues group related work). Read the open issues
+before starting work. Full fresh-clone→working-bot walkthrough: `SETUP.md`.
+Per-server firewall + `--port` syntax reference: `docs/PER_GAME_PORTS.md`.
 
 ## CLI commands
 

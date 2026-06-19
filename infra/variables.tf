@@ -21,7 +21,7 @@ variable "ssh_source_ranges" {
 }
 
 # Game ports are no longer global — the provider opens each server's ports on its
-# own per-server firewall rule (see PER_GAME_PORT_INSTRUCTIONS.md). No game_*_ports
+# own per-server firewall rule (see docs/PER_GAME_PORTS.md). No game_*_ports
 # vars anymore.
 
 # --- Control plane (Cloud Run worker + Pub/Sub) ----------------------------

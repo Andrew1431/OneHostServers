@@ -7,7 +7,8 @@ is snapshotted and the instance is deleted. Boot it back from a Discord command.
 
 > ⚠️ **Early stages, but functional.** Both vertical slices work end-to-end and
 > the cost model is real, but this is a young project: rough edges, deliberate v1
-> shortcuts (`docs/SHORTCUTS.md`), and breaking changes are expected. Run it in
+> shortcuts (tracked in [GitHub issues](https://github.com/Andrew1431/OneHostServers/issues)),
+> and breaking changes are expected. Run it in
 > your own project, read what it does before pointing it at anything you care
 > about, and expect to get your hands dirty.
 
@@ -39,7 +40,7 @@ infra/         Terraform: network + firewall (main.tf); control plane + the
                reconcile-sweep cron (cloudrun.tf)
 SETUP.md           fresh clone -> working bot, step by step
 MACHINE_AGENT.md   on-VM contract: graceful stop + the optional idle agent
-docs/SHORTCUTS.md  every deliberate v1 shortcut + its refactor note
+docs/PER_GAME_PORTS.md  per-server firewall + per-game --port syntax reference
 ```
 
 Lifecycle is **disk snapshots**, so it's game-agnostic — OneHost never looks
@@ -119,4 +120,6 @@ worst-case (a full disk's worth), i.e. the ceiling on a month of pure idle.
 > your region. Other regions differ; `northamerica-northeast2` is the region
 > OneHost's cost table is priced for (`packages/gcp/src/pricing.ts`).
 
-See `docs/SHORTCUTS.md` for what's intentionally unfinished.
+See the [GitHub issues](https://github.com/Andrew1431/OneHostServers/issues) for
+planned work and intentional v1 cuts (labelled by origin/type/priority; `epic`
+issues group related work).

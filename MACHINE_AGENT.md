@@ -10,7 +10,8 @@ game-agnostic by design). That makes the disk's **on-disk consistency at snapsho
 time** entirely your responsibility. This doc is that contract.
 
 > **The contract is about behavior, not technology.** Everything below is stated
-> in terms of Docker Compose + systemd because that's the SHORTCUTS #1 convention
+> in terms of Docker Compose + systemd because that's the planned reproducible-boot
+> convention (issue #14)
 > and makes for a concrete sample — but nothing here *requires* Docker. The only
 > real requirements are: (1) your game flushes/saves and exits cleanly when the OS
 > shuts down (the ACPI window, below), and (2) — if you want self-teardown — the
@@ -112,7 +113,7 @@ gcloud compute instances stop <name> --zone <zone>   # full ACPI path
 ## Optional: the idle agent (only if you want self-teardown)
 
 Everything above makes *operator-initiated* stops graceful. The **idle
-self-teardown** feature (IDEAS.md "Idle self-teardown") is separate: the VM
+self-teardown** feature (idle self-teardown — issue #18) is separate: the VM
 notices it's empty and asks the control plane to stop it. The VM **must not stop
 itself** — `instances.delete` would kill the process mid-sequence and it'd need
 broad GCP creds on an untrusted box. So the agent only **signals**; the off-box
@@ -174,7 +175,7 @@ The `count_players` probe is the only game-specific part:
   Steam A2S query.
 - **Minecraft:** a Server List Ping or RCON `list` for the real count.
 
-### Where the idle path stands (see IDEAS.md / SHORTCUTS.md)
+### Where the idle path stands (see issue #18)
 
 The signal → teardown path **works end-to-end** (verified): a VM publishes
 `{kind:stop,id}`, the push subscription delivers it, and the worker runs
@@ -190,8 +191,8 @@ edges:
   `onehost-jobs` can stop *any* server — so a compromised game box could stop
   others'. Per-server authz (bind the VM's SA/message to its own id) is the
   hardening.
-- **Lost signal (backstop now built):** the publish is fire-and-forget (SHORTCUTS
-  #6), so a dropped message could leave a VM billing forever. A Cloud Scheduler
+- **Lost signal (backstop now built):** the publish is fire-and-forget, so a
+  dropped message could leave a VM billing forever. A Cloud Scheduler
   reconcile sweep (`{kind:sweep}` → worker `provider.reconcile`) now catches it:
   any RUNNING server past `ONEHOST_MAX_UPTIME_HOURS` is flagged (and optionally
   auto-stopped via `ONEHOST_AUTOSTOP_UPTIME_HOURS`), regardless of whether its idle

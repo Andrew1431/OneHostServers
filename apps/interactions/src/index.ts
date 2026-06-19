@@ -10,9 +10,9 @@ import { publisherFromEnv, type Job } from '@onehost/jobs';
  * place when the VM is up/down (see apps/worker).
  *
  * Commands: /list (also serves as status), /start <id>, /stop <id>. Provisioning
- * (create/destroy) is intentionally CLI-only — see ROADMAP.
+ * (create/destroy) is intentionally CLI-only by design.
  *
- * AuthZ (SHORTCUTS.md #3): delegated to Discord. Register the commands to a single
+ * AuthZ (issue #5): delegated to Discord. Register the commands to a single
  * channel and use Discord's channel/role permissions to decide who may run them.
  * As defense-in-depth we also reject any interaction whose channel_id isn't the
  * configured DISCORD_CHANNEL_ID (when set).

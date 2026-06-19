@@ -1,10 +1,11 @@
-# Per-server / per-game firewall — implementation brief
+# Per-server / per-game firewall + `--port` reference
 
-Hand-off note for a fresh conversation. Goal: each game server opens **only its
-own ports**, instead of every VM sharing one global firewall rule. This is the
-prerequisite that unblocks built-in games (`create --game=<x>`), because a game
-manifest's port list has to actually drive infra — see `IDEAS.md` discussion and
-`docs/SHORTCUTS.md` #8.
+> **Status: implemented.** Each game server opens **only its own ports** via a
+> provider-managed per-server firewall rule (`onehost-game-<id>`) — the old shared
+> global rule is retired. This doc is kept as the design record + the authoritative
+> `--port` / `ports` **syntax reference** (see "Port syntax" below). The per-server
+> firewall is also the prerequisite that unblocks built-in games
+> (`create --game=<x>`, issue #15) — a game manifest's port list drives infra.
 
 ## The cut we're fixing
 
@@ -121,6 +122,5 @@ comma list or repeated `--port` (not a range). `pnpm cli ports <id>` with **no**
 - `infra/variables.tf`, `infra/terraform.tfvars(.example)` — port vars.
 - `packages/gcp/src/provider.ts` — `create`/`start`/`destroy`, the `tags` blocks,
   add `serverTag()` + firewall insert/delete + global-op wait.
-- `apps/cli/src/index.ts` — `buildSpec` already carries `ports`; the `--port` flag
-  exists. Confirm it flows through.
-- `docs/SHORTCUTS.md` #8 — mark resolved when done.
+- `apps/cli/src/index.ts` — `buildSpec` carries `ports`; the `--port` flag flows
+  through to the per-server rule.

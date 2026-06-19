@@ -188,7 +188,7 @@ finishes, note the **`interactions_url`** output.
 ## 8. Use it
 
 First, create a server with the CLI and install your game over SSH — first boot is
-hands-on (see `docs/SHORTCUTS.md` #1):
+hands-on (reproducible-provisioning is planned — issue #14):
 
 ```bash
 pnpm cli create mc --vcpus 2 --memory 4096 --disk 20 --port tcp:25565

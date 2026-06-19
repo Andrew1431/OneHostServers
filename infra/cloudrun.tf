@@ -102,7 +102,7 @@ resource "google_service_account_iam_member" "worker_actas_game_vm" {
 }
 
 # The worker drives Compute (instances + disks + snapshots). roles/compute.admin
-# is broad for v1; SHORTCUTS.md (#3/#8) — tighten to a custom role later.
+# is broad for v1; tighten to a custom role later (issue #5).
 resource "google_project_iam_member" "worker_compute" {
   count   = local.control_plane ? 1 : 0
   project = var.project_id

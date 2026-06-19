@@ -13,7 +13,7 @@ import type {
  * interface; nothing else in the system changes.
  *
  * Implementations must be idempotent-friendly: callers may retry on failure.
- * See docs/SHORTCUTS.md (#5) — full idempotency keys are a future refactor.
+ * See issue #17 — full idempotency keys are a future refactor.
  */
 /**
  * One-off overrides when starting. If omitted, the provider restores the
@@ -36,7 +36,7 @@ export interface StopOptions {
   /**
    * Treat "no instance to stop" as success instead of throwing. Off by default
    * so an operator typo still errors; on for idle/retried/swept stops where the
-   * VM may already be gone (idempotency — see docs/SHORTCUTS.md #5).
+   * VM may already be gone (idempotency — see issue #17).
    */
   allowAlreadyStopped?: boolean;
 }
@@ -92,7 +92,7 @@ export interface ServerProvider {
    * Sweep RUNNING servers and act on any up past the configured ceiling: flag
    * (once, deduped) and optionally auto-stop. Backstops a lost idle-stop signal
    * so a forgotten VM can't bill forever. Returns what it touched, for the
-   * caller to announce (e.g. a channel webhook). See docs/SHORTCUTS.md #6.
+   * caller to announce (e.g. a channel webhook). See issue #18.
    */
   reconcile(opts: ReconcileOptions): Promise<ReconcileReport>;
 }

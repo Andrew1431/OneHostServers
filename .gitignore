@@ -17,3 +17,5 @@ infra/*.tfstate
 infra/*.tfstate.*
 infra/*.tfvars
 !infra/*.tfvars.example
+
+coverage

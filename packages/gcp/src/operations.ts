@@ -9,7 +9,7 @@ import type {
  * `error`, which we throw so callers see the real reason instead of a confusing
  * downstream "not found".
  *
- * SHORTCUTS.md (#5): naive blocking poll, no backoff cap or timeout. Fine for a
+ * Issue #17: naive blocking poll, no backoff cap or timeout. Fine for a
  * CLI; the worker will want a bounded wait + resumable op handles later.
  */
 

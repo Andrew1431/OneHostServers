@@ -8,7 +8,7 @@
  * `PubSubPublisher` in production (Cloud Run -> Pub/Sub topic -> Cloud Run push),
  * `HttpPublisher` for local dev (interactions posts straight at the worker, no
  * GCP). The same topic is where the idle-agent's stop signal will land later
- * (see IDEAS.md "Idle self-teardown").
+ * (idle self-teardown — issue #18).
  */
 
 /**
