@@ -29,10 +29,15 @@ export interface MachineSpec {
 
 export type IpProtocol = 'tcp' | 'udp';
 
-/** A port the game needs open. Generic: the user declares these per server. */
+/**
+ * A port (or contiguous range) the game needs open. Generic: the user declares
+ * these per server. `port` is a GCP firewall port token — a single port
+ * (`"25565"`) or an inclusive range (`"15636-15637"`). Discontiguous ports are
+ * expressed as separate rules.
+ */
 export interface PortRule {
   protocol: IpProtocol;
-  port: number;
+  port: string;
 }
 
 /** Everything needed to provision a server. Immutable user intent. */

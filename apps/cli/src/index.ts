@@ -5,7 +5,7 @@ import { viewServer } from '@onehost/core';
 import type { StartOptions, ReconcileOptions } from '@onehost/provider-api';
 import { GcpServerProvider } from '@onehost/gcp';
 import { loadGcpConfig, writeConfig, envFilePath } from './config.ts';
-import { createInteractively } from './interactive.ts';
+import { createInteractively, startInteractively } from './interactive.ts';
 import { runInit } from './init.ts';
 
 /**
@@ -46,6 +46,13 @@ async function main(): Promise<void> {
     }
     case 'start': {
       if (!id) return fail('start needs a server id');
+      // Opt-in picker — plain `start` stays non-interactive and restores the
+      // sizing the snapshot remembers (only `--interactive`/`-i` prompts).
+      if (rest.includes('-i') || rest.includes('--interactive')) {
+        if (!process.stdin.isTTY) return fail('--interactive needs a TTY');
+        await startInteractively(provider, { id, cfg });
+        break;
+      }
       const running = await provider.start(id, parseStartOpts(rest));
       console.log(`✅ started '${id}' — reachable at ${running.address}`);
       break;
@@ -106,6 +113,19 @@ async function main(): Promise<void> {
       }
       process.exit(result.status ?? 0);
     }
+    case 'ports': {
+      if (!id) return fail('ports needs a server id');
+      const ports = parsePorts(rest);
+      await provider.setPorts(id, ports);
+      if (ports.length === 0) {
+        console.log(`✅ '${id}' — firewall rule removed (no game ports open)`);
+      } else {
+        const list = ports.map((p) => `${p.protocol}:${p.port}`).join(', ');
+        console.log(`✅ '${id}' now opens ${list}`);
+        console.log('   Running servers apply this live; a stopped one picks it up on next start.');
+      }
+      break;
+    }
     case 'destroy': {
       if (!id) return fail('destroy needs a server id');
       await provider.destroy(id);
@@ -148,12 +168,9 @@ function parseFlags(args: string[]): Flags {
       case '--machine':
         flags.machine = value;
         break;
-      case '--port': {
-        const [protocol, port] = value.split(':');
-        if (protocol !== 'tcp' && protocol !== 'udp') return fail(`bad --port: ${value}`);
-        flags.ports.push({ protocol, port: Number(port) });
+      case '--port':
+        flags.ports.push(...parsePortFlag(value));
         break;
-      }
       default:
         return fail(`unknown flag: ${key}`);
     }
@@ -178,6 +195,38 @@ function parseStartOpts(args: string[]): StartOptions {
     } else return fail(`unknown flag: ${key}`);
   }
   return opts;
+}
+
+/** Parse `--port tcp:25565` flags for the `ports` command. No ports => clear the rule. */
+function parsePorts(args: string[]): ServerSpec['ports'] {
+  const ports: ServerSpec['ports'] = [];
+  for (let i = 0; i < args.length; i += 2) {
+    const key = args[i];
+    const value = args[i + 1];
+    if (value === undefined) break;
+    if (key !== '--port') return fail(`unknown flag: ${key}`);
+    ports.push(...parsePortFlag(value));
+  }
+  return ports;
+}
+
+/**
+ * Parse one `--port` value into rules. Accepts `proto:spec` where spec is a
+ * comma-separated list of single ports and/or inclusive ranges:
+ *   tcp:25565            tcp:80,443            udp:15636-15637,27015
+ * Each list item becomes its own rule (GCP firewall port tokens are 1:1 with these).
+ */
+function parsePortFlag(value: string): ServerSpec['ports'] {
+  const [protocol, spec] = value.split(':');
+  if (protocol !== 'tcp' && protocol !== 'udp') return fail(`bad --port: ${value} (want tcp:… or udp:…)`);
+  if (!spec) return fail(`bad --port: ${value} (missing port)`);
+  return spec.split(',').map((token) => {
+    if (!/^\d+(-\d+)?$/.test(token)) return fail(`bad --port: '${token}' in ${value} (use N or N-M)`);
+    const bounds = token.split('-').map(Number);
+    if (bounds.some((n) => n < 1 || n > 65535)) return fail(`port out of range in ${value} (1-65535)`);
+    if (bounds.length === 2 && bounds[0]! > bounds[1]!) return fail(`reversed range in ${value}`);
+    return { protocol, port: token };
+  });
 }
 
 /** Sweep thresholds: flags win, else the ONEHOST_*_UPTIME_HOURS env, else off. */
@@ -276,8 +325,10 @@ function usage(): void {
       '              [-i|--interactive]                               # force the picker',
       '  start <id>  [--disk-type pd-ssd] [--machine c2-standard-4]   # override to upgrade',
       '              [--disk 40]                                      # grow boot disk (GB, >= snapshot)',
+      '              [-i|--interactive]                               # pick machine/disk override from a menu',
       '  stop <id>',
       '  status <id>',
+      '  ports <id> [--port udp:15636-15637] [--port tcp:80,443]      # set open ports (CLI-only); ranges N-M and lists N,M ok; no --port clears them',
       '  ssh <id> [-- <remote command>]                               # gcloud compute ssh into it',
       '  list                                                         # all servers, all zones',
       '  sweep [--max-uptime <h>] [--autostop <h>]                    # flag/auto-stop long-running servers',

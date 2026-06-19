@@ -2,6 +2,7 @@ import {
   InstancesClient,
   DisksClient,
   SnapshotsClient,
+  FirewallsClient,
   ZonesClient,
   ZoneOperationsClient,
   GlobalOperationsClient,
@@ -15,6 +16,7 @@ import type {
   ServerSummary,
   RunningServer,
   StaleServer,
+  PortRule,
 } from '@onehost/core';
 import {
   type ServerProvider,
@@ -39,6 +41,8 @@ import {
   diskName,
   snapshotName,
   machineTypeName,
+  serverTag,
+  firewallRuleName,
 } from './naming.ts';
 import { waitZonal, waitGlobal } from './operations.ts';
 
@@ -55,6 +59,7 @@ export class GcpServerProvider implements ServerProvider {
   private readonly instances = new InstancesClient();
   private readonly disks = new DisksClient();
   private readonly snapshots = new SnapshotsClient();
+  private readonly firewalls = new FirewallsClient();
   private readonly zones = new ZonesClient();
   private readonly zoneOps = new ZoneOperationsClient();
   private readonly globalOps = new GlobalOperationsClient();
@@ -109,6 +114,12 @@ export class GcpServerProvider implements ServerProvider {
     const machineType = machineTypeName(spec.machine);
     const diskType = spec.machine.diskType;
 
+    // The server's own ingress rule (only its ports, targeting its per-server
+    // tag). Global resource, so create it once up front — independent of which
+    // zone the instance lands in, and harmless if the instance insert later
+    // fails (a stray rule is ~$0 and `destroy`/`ports` reclaims it).
+    await this.ensureFirewallRule(spec.id, spec.ports);
+
     // Single atomic insert (inline boot disk) — nothing to clean up on failure,
     // so capacity exhaustion just moves to the next zone.
     return this.withZoneFallback(async (zone) => {
@@ -118,7 +129,7 @@ export class GcpServerProvider implements ServerProvider {
         instanceResource: {
           name,
           machineType: `zones/${zone}/machineTypes/${machineType}`,
-          tags: { items: [this.cfg.networkTag] },
+          tags: { items: [this.cfg.networkTag, serverTag(spec.id)] },
           ...this.identity(spec.id),
           labels: {
             [SERVER_LABEL]: name,
@@ -188,7 +199,11 @@ export class GcpServerProvider implements ServerProvider {
           instanceResource: {
             name,
             machineType: `zones/${zone}/machineTypes/${machineType}`,
-            tags: { items: [this.cfg.networkTag] },
+            // Re-attach the per-server tag so the persistent firewall rule
+            // (created at `create`, untouched by stop/start) matches again. No
+            // firewall write here — `start` runs on the worker, which has no
+            // securityAdmin; rule lifecycle stays CLI-only.
+            tags: { items: [this.cfg.networkTag, serverTag(id)] },
             ...this.identity(id),
             labels: {
               [SERVER_LABEL]: name,
@@ -294,6 +309,20 @@ export class GcpServerProvider implements ServerProvider {
       const [snapDel] = await this.snapshots.delete({ project: projectId, snapshot: snap });
       await waitGlobal(this.globalOps, projectId, snapDel);
     }
+
+    // Reclaim the server's own firewall rule (no-op if it never had ports).
+    await this.deleteFirewallRule(id);
+  }
+
+  /**
+   * Replace a server's ingress rule with exactly the given ports — the CLI-only
+   * surface for changing what's open (the brief's `ports` command, and the
+   * migration tool for servers created before per-server firewalls existed).
+   * Takes effect live for a running server; a stopped one picks it up on next
+   * start. Empty `ports` removes the rule entirely.
+   */
+  async setPorts(id: ServerId, ports: PortRule[]): Promise<void> {
+    await this.ensureFirewallRule(id, ports);
   }
 
   async status(id: ServerId): Promise<ServerStatus> {
@@ -501,6 +530,68 @@ export class GcpServerProvider implements ServerProvider {
       if (!isNotFound(err)) {
         console.error(`cleanup: could not delete disk ${diskName(id)} in ${zone}:`, err);
       }
+    }
+  }
+
+  /**
+   * Create-or-replace the server's ingress rule so it opens exactly `ports` on
+   * its per-server tag from anywhere. Firewalls are a global resource (mirror the
+   * snapshot waits). Empty `ports` => no rule to have, so we delete instead (an
+   * allow-rule with no ports is invalid anyway).
+   */
+  private async ensureFirewallRule(id: ServerId, ports: PortRule[]): Promise<void> {
+    if (ports.length === 0) {
+      await this.deleteFirewallRule(id);
+      return;
+    }
+    const { projectId } = this.cfg;
+    const name = firewallRuleName(id);
+    const tcp = ports.filter((p) => p.protocol === 'tcp').map((p) => p.port);
+    const udp = ports.filter((p) => p.protocol === 'udp').map((p) => p.port);
+    const allowed = [
+      ...(tcp.length ? [{ IPProtocol: 'tcp', ports: tcp }] : []),
+      ...(udp.length ? [{ IPProtocol: 'udp', ports: udp }] : []),
+    ];
+    const firewallResource = {
+      name,
+      network: `projects/${projectId}/global/networks/onehost`,
+      direction: 'INGRESS',
+      targetTags: [serverTag(id)],
+      sourceRanges: ['0.0.0.0/0'],
+      allowed,
+    };
+
+    // Update in place if it already exists (re-running `ports`, or `create` on a
+    // re-used id); otherwise insert. `update` is a full replace, so the rule
+    // always reflects exactly the ports passed.
+    if (await this.firewallExists(name)) {
+      const [resp] = await this.firewalls.update({ project: projectId, firewall: name, firewallResource });
+      await waitGlobal(this.globalOps, projectId, resp);
+    } else {
+      const [resp] = await this.firewalls.insert({ project: projectId, firewallResource });
+      await waitGlobal(this.globalOps, projectId, resp);
+    }
+  }
+
+  /** Best-effort delete of the server's firewall rule; ignores not-found. */
+  private async deleteFirewallRule(id: ServerId): Promise<void> {
+    const { projectId } = this.cfg;
+    const name = firewallRuleName(id);
+    try {
+      const [resp] = await this.firewalls.delete({ project: projectId, firewall: name });
+      await waitGlobal(this.globalOps, projectId, resp);
+    } catch (err) {
+      if (!isNotFound(err)) throw err;
+    }
+  }
+
+  private async firewallExists(name: string): Promise<boolean> {
+    try {
+      await this.firewalls.get({ project: this.cfg.projectId, firewall: name });
+      return true;
+    } catch (err) {
+      if (isNotFound(err)) return false;
+      throw err;
     }
   }
 

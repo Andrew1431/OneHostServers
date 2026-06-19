@@ -20,17 +20,9 @@ variable "ssh_source_ranges" {
   description = "CIDRs allowed to SSH. Strongly recommend narrowing to your own IP."
 }
 
-variable "game_tcp_ports" {
-  type        = list(string)
-  default     = ["25565"] # Minecraft default
-  description = "TCP ports opened on game VMs."
-}
-
-variable "game_udp_ports" {
-  type        = list(string)
-  default     = ["2456-2458", "15637"] # Valheim range; Enshrouded query/game port
-  description = "UDP ports opened on game VMs."
-}
+# Game ports are no longer global — the provider opens each server's ports on its
+# own per-server firewall rule (see PER_GAME_PORT_INSTRUCTIONS.md). No game_*_ports
+# vars anymore.
 
 # --- Control plane (Cloud Run worker + Pub/Sub) ----------------------------
 # The control plane is the job topic + worker that drive start/stop off-box. It's

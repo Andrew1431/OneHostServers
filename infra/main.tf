@@ -41,23 +41,7 @@ resource "google_compute_firewall" "ssh" {
   source_ranges = var.ssh_source_ranges
 }
 
-# Game ports. SHORTCUTS.md (#8): one shared rule for all servers in v1; per-server
-# firewall scoping (so each server only opens its own ports) is a future refactor.
-resource "google_compute_firewall" "game" {
-  name      = "onehost-allow-game"
-  network   = google_compute_network.onehost.name
-  direction = "INGRESS"
-
-  allow {
-    protocol = "tcp"
-    ports    = var.game_tcp_ports
-  }
-
-  allow {
-    protocol = "udp"
-    ports    = var.game_udp_ports
-  }
-
-  target_tags   = [var.network_tag]
-  source_ranges = ["0.0.0.0/0"]
-}
+# Game ports are now per-server: the provider creates an `onehost-game-<id>` rule
+# targeting that server's own `onehost-srv-<id>` tag, opening only its ports
+# (`pnpm cli create --port …` / `pnpm cli ports …`). No shared game rule here —
+# see SHORTCUTS.md #8 and PER_GAME_PORT_INSTRUCTIONS.md.

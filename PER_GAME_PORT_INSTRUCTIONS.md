@@ -89,6 +89,26 @@ Once ports are per-server and provider-driven, a game manifest can declare
 self-contained and worth doing on its own**; it doesn't require the game-catalog
 work to land first.
 
+## Port syntax (`create --port` and `ports`)
+
+`PortRule.port` is a GCP firewall port token: a single port or an inclusive
+range. A `--port` value is `proto:spec`, where `spec` is a comma-separated list
+of ports and/or ranges; each list item becomes its own rule. Repeat `--port` for
+mixed protocols. Examples:
+
+| Game                  | Flags                                                        |
+|-----------------------|-------------------------------------------------------------|
+| Minecraft (Java)      | `--port tcp:25565`                                           |
+| Minecraft (+Bedrock)  | `--port tcp:25565 --port udp:19132`                          |
+| Enshrouded            | `--port udp:15636-15637`                                     |
+| Valheim               | `--port udp:2456-2458`                                       |
+| Source/Steam (e.g.)   | `--port udp:27015 --port tcp:27015`                          |
+| Mixed list + range    | `--port udp:15636-15637,27015 --port tcp:80,443`            |
+
+Rules: ports 1–65535; ranges are `N-M` with `N <= M`; discontiguous ports use a
+comma list or repeated `--port` (not a range). `pnpm cli ports <id>` with **no**
+`--port` deletes the rule (closes all game ports; SSH unaffected).
+
 ## Acceptance check
 - `create foo --port udp:15637` opens 15637/udp on `foo` only; a second server
   `bar` created without it cannot be reached on 15637.

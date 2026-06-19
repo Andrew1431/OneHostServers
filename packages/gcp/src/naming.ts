@@ -29,6 +29,22 @@ export function snapshotName(id: ServerId, at: number = Date.now()): string {
 }
 
 /**
+ * Per-server network tag. The instance wears this *in addition to* the shared
+ * `onehost` tag (which the global SSH rule targets); the server's own firewall
+ * rule targets this tag so it opens only that server's ports. `onehost-srv-`
+ * (12) + sanitizeName's ≤50 keeps us under GCP's 63-char tag limit and the
+ * letter-start rule.
+ */
+export function serverTag(id: ServerId): string {
+  return `onehost-srv-${sanitizeName(id)}`;
+}
+
+/** Name of the server's own ingress firewall rule (created/updated/deleted CLI-side). */
+export function firewallRuleName(id: ServerId): string {
+  return `onehost-game-${sanitizeName(id)}`;
+}
+
+/**
  * Resolve the GCP machine type. An explicit `machine.type` (e.g. "n2-standard-4")
  * wins; otherwise we build a custom e2 from vcpus/memory. GCP validates the exact
  * vcpu/memory combos, so we let the API reject invalid specs rather than

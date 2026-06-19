@@ -42,7 +42,9 @@ pnpm cli config --project <id> [--zone <z>] [--keep-snapshots <n>]
 pnpm cli create [<id>]                          # interactive picker in a TTY (machine tier + cost estimate)
 pnpm cli create <id> [--vcpus 2] [--memory 4096] [--disk 20] [--disk-type pd-balanced] [--machine n2-standard-4] [--port tcp:25565]
 pnpm cli start <id>   [--machine c2-standard-4] [--disk-type pd-ssd] [--disk 40]   # overrides upgrade on restore
+pnpm cli start <id>   [-i|--interactive]        # pick machine/disk override from a menu (plain start restores remembered sizing)
 pnpm cli stop <id>                              # ACPI quiesce → snapshot → delete instance+disk
+pnpm cli ports <id> [--port udp:15636-15637] [--port tcp:80,443]   # set open ports (CLI-only); ranges N-M + lists N,M ok; no --port clears them
 pnpm cli status <id>
 pnpm cli list                                   # all servers, all zones (live + snapshot-only)
 pnpm cli ssh <id> [-- <remote cmd>]             # hands off to user's `gcloud compute ssh`
