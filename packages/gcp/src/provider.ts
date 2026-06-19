@@ -47,6 +47,35 @@ import {
 import { waitZonal, waitGlobal } from './operations.ts';
 
 /**
+ * The seven GCP Compute clients the provider drives. Bundled so they can be
+ * injected as a unit — production passes the real clients ({@link defaultClients}),
+ * tests pass a recording fake. Keeping them behind one type means a new client
+ * is a single edit here rather than another constructor parameter everywhere.
+ */
+export interface GcpClients {
+  instances: InstancesClient;
+  disks: DisksClient;
+  snapshots: SnapshotsClient;
+  firewalls: FirewallsClient;
+  zones: ZonesClient;
+  zoneOps: ZoneOperationsClient;
+  globalOps: GlobalOperationsClient;
+}
+
+/** The real GCP clients, with ADC. Used when no clients are injected. */
+export function defaultClients(): GcpClients {
+  return {
+    instances: new InstancesClient(),
+    disks: new DisksClient(),
+    snapshots: new SnapshotsClient(),
+    firewalls: new FirewallsClient(),
+    zones: new ZonesClient(),
+    zoneOps: new ZoneOperationsClient(),
+    globalOps: new GlobalOperationsClient(),
+  };
+}
+
+/**
  * GCP implementation of the provider seam. Lifecycle uses disk snapshots so it
  * is game-agnostic: we never look inside the disk, just snapshot/restore it.
  *
@@ -56,15 +85,32 @@ import { waitZonal, waitGlobal } from './operations.ts';
  *   destroy: delete instance + all of the server's snapshots
  */
 export class GcpServerProvider implements ServerProvider {
-  private readonly instances = new InstancesClient();
-  private readonly disks = new DisksClient();
-  private readonly snapshots = new SnapshotsClient();
-  private readonly firewalls = new FirewallsClient();
-  private readonly zones = new ZonesClient();
-  private readonly zoneOps = new ZoneOperationsClient();
-  private readonly globalOps = new GlobalOperationsClient();
+  private readonly instances: InstancesClient;
+  private readonly disks: DisksClient;
+  private readonly snapshots: SnapshotsClient;
+  private readonly firewalls: FirewallsClient;
+  private readonly zones: ZonesClient;
+  private readonly zoneOps: ZoneOperationsClient;
+  private readonly globalOps: GlobalOperationsClient;
 
-  constructor(private readonly cfg: GcpConfig) {}
+  /**
+   * @param cfg     placement + naming config.
+   * @param clients GCP clients to drive; defaults to the real ones so existing
+   *                `new GcpServerProvider(cfg)` call sites are unaffected. Tests
+   *                inject a fake to exercise the resiliency logic off-cloud.
+   */
+  constructor(
+    private readonly cfg: GcpConfig,
+    clients: GcpClients = defaultClients(),
+  ) {
+    this.instances = clients.instances;
+    this.disks = clients.disks;
+    this.snapshots = clients.snapshots;
+    this.firewalls = clients.firewalls;
+    this.zones = clients.zones;
+    this.zoneOps = clients.zoneOps;
+    this.globalOps = clients.globalOps;
+  }
 
   /** Region derived from the zone, e.g. "northamerica-northeast2-a" -> "...northeast2". */
   private get region(): string {
