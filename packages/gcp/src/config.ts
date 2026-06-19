@@ -35,6 +35,15 @@ export const MACHINE_LABEL = 'onehost-machine';
 export const DISKTYPE_LABEL = 'onehost-disktype';
 
 /**
+ * The server's DuckDNS subdomain label, carried forward across stop/start exactly
+ * like the sizing labels, so the worker (which only gets a job `id`) can learn the
+ * hostname to upsert without a database. DuckDNS subdomains are RFC1035-safe
+ * (lowercase alphanumeric + hyphens), so they store directly as a GCP label value.
+ * Absent ⇒ DNS is not enabled for the server (opt-in). See epic #13.
+ */
+export const DNS_HOST_LABEL = 'onehost-dns-host';
+
+/**
  * Dedup marker the reconcile sweep stamps (epoch seconds) on an instance once it
  * has warned about that instance's uptime, so a 15-min sweep doesn't re-alert
  * every pass. Lives on the instance, so stop (deletes it) / start (fresh

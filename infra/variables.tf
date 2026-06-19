@@ -107,6 +107,13 @@ variable "discord_channel_webhook_url" {
   description = "Channel webhook the worker posts to for jobs with no interaction (idle self-teardown, future reconcile sweep / nag). Empty = those jobs run silently."
 }
 
+variable "duckdns_token" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = "DuckDNS account token for the stable-address (DNS) feature. Empty = DNS off (opt-in); when set, it's stored in Secret Manager and injected into the worker as DUCKDNS_TOKEN. See epic #13 / MACHINE_AGENT.md."
+}
+
 variable "interactions_image" {
   type        = string
   default     = ""

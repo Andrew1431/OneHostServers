@@ -33,5 +33,10 @@ autostop_uptime_hours = 0           # also auto-stop at this many hours (0 = war
 # sweep_schedule      = "*/15 * * * *"  # cron (UTC); default every 15 min
 # sweep_location      = ""               # set if region lacks Cloud Scheduler
 #                                        # (e.g. northamerica-northeast2 → use northeast1)
+
+# Optional: stable address (DuckDNS). Blank = off. When set, stored in Secret
+# Manager and injected into the worker; per-server hostnames via `create --dns`.
+duckdns_token = ""
+
 interactions_image     = "us-central1-docker.pkg.dev/PROJECT/onehost/interactions:latest"
 worker_image           = "us-central1-docker.pkg.dev/PROJECT/onehost/worker:latest"

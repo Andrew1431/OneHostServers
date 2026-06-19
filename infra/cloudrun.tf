@@ -31,6 +31,9 @@ locals {
   # Scheduler isn't available in every region; fall back to var.region but let it
   # be overridden when the region isn't a Scheduler location (e.g. northeast2).
   sweep_location = var.sweep_location != "" ? var.sweep_location : var.region
+  # Stable-address (DuckDNS) is opt-in: only stand up the secret + worker env when
+  # a token is supplied. The worker treats an unset DUCKDNS_TOKEN as "DNS off".
+  dns_enabled = local.control_plane && var.duckdns_token != ""
 }
 
 resource "google_project_service" "run" {
@@ -51,6 +54,40 @@ resource "google_pubsub_topic" "jobs" {
   count      = local.control_plane ? 1 : 0
   name       = "onehost-jobs"
   depends_on = [google_project_service.pubsub]
+}
+
+# --- DuckDNS token (Secret Manager) -----------------------------------------
+# Opt-in stable-address feature: the worker upserts an A record on start and
+# clears it on stop (epic #13). The token is the one deployment-wide secret the
+# feature needs; it stays off the game VMs entirely (off-box DNS).
+
+resource "google_project_service" "secretmanager" {
+  count              = local.dns_enabled ? 1 : 0
+  service            = "secretmanager.googleapis.com"
+  disable_on_destroy = false
+}
+
+resource "google_secret_manager_secret" "duckdns_token" {
+  count     = local.dns_enabled ? 1 : 0
+  secret_id = "onehost-duckdns-token"
+  replication {
+    auto {}
+  }
+  depends_on = [google_project_service.secretmanager]
+}
+
+resource "google_secret_manager_secret_version" "duckdns_token" {
+  count       = local.dns_enabled ? 1 : 0
+  secret      = google_secret_manager_secret.duckdns_token[0].id
+  secret_data = var.duckdns_token
+}
+
+# Only the worker reads it (interactions never touches DNS).
+resource "google_secret_manager_secret_iam_member" "worker_duckdns" {
+  count     = local.dns_enabled ? 1 : 0
+  secret_id = google_secret_manager_secret.duckdns_token[0].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.worker[0].email}"
 }
 
 # --- Service accounts -------------------------------------------------------
@@ -130,11 +167,12 @@ resource "google_pubsub_topic_iam_member" "interactions_publish" {
 # --- worker: private (only the push identity may invoke) --------------------
 
 resource "google_cloud_run_v2_service" "worker" {
-  count      = local.control_plane ? 1 : 0
-  name       = "onehost-worker"
-  location   = var.region
-  ingress    = "INGRESS_TRAFFIC_ALL" # push arrives over the internet; IAM gates it
-  depends_on = [google_project_service.run]
+  count    = local.control_plane ? 1 : 0
+  name     = "onehost-worker"
+  location = var.region
+  ingress  = "INGRESS_TRAFFIC_ALL" # push arrives over the internet; IAM gates it
+  # The secret IAM must exist before the service mounts DUCKDNS_TOKEN (no-op when DNS off).
+  depends_on = [google_project_service.run, google_secret_manager_secret_iam_member.worker_duckdns]
 
   template {
     service_account = google_service_account.worker[0].email
@@ -178,6 +216,20 @@ resource "google_cloud_run_v2_service" "worker" {
       env {
         name  = "ONEHOST_AUTOSTOP_UPTIME_HOURS"
         value = tostring(var.autostop_uptime_hours)
+      }
+      # DuckDNS token from Secret Manager — only when the DNS feature is enabled.
+      # Absent => the worker's dnsProviderFromEnv() returns undefined (DNS off).
+      dynamic "env" {
+        for_each = local.dns_enabled ? [1] : []
+        content {
+          name = "DUCKDNS_TOKEN"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.duckdns_token[0].secret_id
+              version = "latest"
+            }
+          }
+        }
       }
     }
   }

@@ -82,6 +82,8 @@ export interface ServerView {
   address: string;
   machine: string;
   disk: string;
+  /** Full DuckDNS domain (`host.duckdns.org`), or "—" when DNS is off. */
+  dns: string;
 }
 
 export function viewServer(s: ServerSummary): ServerView {
@@ -93,6 +95,7 @@ export function viewServer(s: ServerSummary): ServerView {
     address: s.address ?? (s.state === 'RUNNING' ? '(no address)' : '—'),
     machine: describeMachine(s.machineType),
     disk: s.diskType ?? '—',
+    dns: s.dnsHost ? `${s.dnsHost}.duckdns.org` : '—',
   };
 }
 

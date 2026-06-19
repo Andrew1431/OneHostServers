@@ -40,6 +40,24 @@ export interface PortRule {
   port: string;
 }
 
+/**
+ * Optional stable-address config. Opt-in: omit it and the server keeps its bare
+ * ephemeral IP (which changes every start). When set, the control plane upserts an
+ * A record on each boot and clears it on stop (epic #13). DNS is its own seam
+ * (`@onehost/dns`), not part of the cloud provider — `provider` only selects the
+ * adapter.
+ */
+export interface DnsSpec {
+  /** Adapter selector. v1 ships only DuckDNS. */
+  provider: 'duckdns';
+  /**
+   * The subdomain *label* the record lives at — `myserver` for
+   * `myserver.duckdns.org`, not the full domain. Must be label-safe (lowercase
+   * alphanumeric + hyphens) so it survives as a GCP label across stop/start.
+   */
+  hostname: string;
+}
+
 /** Everything needed to provision a server. Immutable user intent. */
 export interface ServerSpec {
   id: ServerId;
@@ -47,6 +65,8 @@ export interface ServerSpec {
   machine: MachineSpec;
   ports: PortRule[];
   region: string;
+  /** Optional stable address (opt-in). See {@link DnsSpec}. */
+  dns?: DnsSpec;
 }
 
 /** Persisted record of a server's current reality. */
@@ -66,6 +86,8 @@ export interface ServerStatus {
 export interface RunningServer {
   id: ServerId;
   address: string;
+  /** DuckDNS subdomain label this server resolves at, if DNS is enabled. */
+  dnsHost?: string;
 }
 
 /**
@@ -91,4 +113,6 @@ export interface ServerSummary {
   /** Sizing remembered on the instance or its latest snapshot, if known. */
   machineType?: string;
   diskType?: string;
+  /** DuckDNS subdomain label remembered on the instance/snapshot, if DNS is enabled. */
+  dnsHost?: string;
 }

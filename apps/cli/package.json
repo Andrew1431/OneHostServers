@@ -14,6 +14,7 @@
   "dependencies": {
     "@clack/prompts": "^0.11.0",
     "@onehost/core": "workspace:*",
+    "@onehost/dns": "workspace:*",
     "@onehost/gcp": "workspace:*",
     "@onehost/provider-api": "workspace:*"
   },

@@ -53,6 +53,7 @@ export interface FakeInstance {
 export interface FakeSnapshot {
   name: string;
   labels?: Record<string, string>;
+  labelFingerprint?: string;
   creationTimestamp?: string;
 }
 
@@ -169,6 +170,17 @@ class FakeSnapshotsClient extends FakeClient {
   }
   async delete(req: unknown): Promise<unknown> {
     return this.invoke('delete', req, DONE_OP);
+  }
+  async get(req: { snapshot: string }): Promise<unknown> {
+    const found = this.state.snapshots.find((s) => s.name === req.snapshot);
+    if (!found) {
+      this.invoke('get', req, undefined);
+      throw notFoundError(`snapshot ${req.snapshot} not found`);
+    }
+    return this.invoke('get', req, [found]);
+  }
+  async setLabels(req: unknown): Promise<unknown> {
+    return this.invoke('setLabels', req, DONE_OP);
   }
   listAsync(req: unknown): AsyncIterable<FakeSnapshot> {
     this.calls.push({ method: 'snapshots.listAsync', args: req });

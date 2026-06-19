@@ -4,6 +4,7 @@ import {
   SERVER_LABEL,
   MACHINE_LABEL,
   DISKTYPE_LABEL,
+  DNS_HOST_LABEL,
   NAGGED_LABEL,
   DEFAULT_MACHINE_TYPE,
   DEFAULT_DISK_TYPE,
@@ -422,6 +423,129 @@ describe('snapshot prune (via stop)', () => {
     const p = new GcpServerProvider({ ...cfg, snapshotKeep: 0 }, fake.clients);
     await p.stop(ID);
     expect(fake.callsTo('snapshots.delete')).toHaveLength(0);
+  });
+});
+
+describe('dns host label', () => {
+  const DNS = 'mc-onehost';
+
+  it('create stamps the dns label and returns dnsHost when spec.dns is set', async () => {
+    const { p, fake } = provider({
+      zones: threeZones,
+      instancesByZone: { 'us-central1-a': [runningInstance()] },
+    });
+    const res = await p.create(spec({ dns: { provider: 'duckdns', hostname: DNS } }));
+    expect(res.dnsHost).toBe(DNS);
+
+    const labels = firstArgs<{ instanceResource: { labels: Record<string, string> } }>(
+      fake,
+      'instances.insert',
+    ).instanceResource.labels;
+    expect(labels[DNS_HOST_LABEL]).toBe(DNS);
+  });
+
+  it('create omits the dns label when spec.dns is absent', async () => {
+    const { p, fake } = provider({
+      zones: threeZones,
+      instancesByZone: { 'us-central1-a': [runningInstance()] },
+    });
+    const res = await p.create(spec());
+    expect(res.dnsHost).toBeUndefined();
+    const labels = firstArgs<{ instanceResource: { labels: Record<string, string> } }>(
+      fake,
+      'instances.insert',
+    ).instanceResource.labels;
+    expect(labels[DNS_HOST_LABEL]).toBeUndefined();
+  });
+
+  it('stop carries the dns label onto the snapshot', async () => {
+    const { p, fake } = provider({
+      instancesByZone: { 'us-central1-a': [runningInstance({ labels: { [DNS_HOST_LABEL]: DNS } })] },
+    });
+    await p.stop(ID);
+    const labels = firstArgs<{ snapshotResource: { labels: Record<string, string> } }>(
+      fake,
+      'disks.createSnapshot',
+    ).snapshotResource.labels;
+    expect(labels[DNS_HOST_LABEL]).toBe(DNS);
+  });
+
+  it('start re-stamps the dns label from the snapshot and returns dnsHost', async () => {
+    const { p, fake } = provider({
+      zones: threeZones,
+      snapshots: [
+        {
+          name: snapshotName(ID, 1000),
+          labels: { [SERVER_LABEL]: instanceName(ID), [DNS_HOST_LABEL]: DNS },
+          creationTimestamp: '2024-01-01T00:00:00Z',
+        },
+      ],
+      instancesByZone: { 'us-central1-a': [runningInstance()] },
+    });
+    const res = await p.start(ID);
+    expect(res.dnsHost).toBe(DNS);
+    const labels = firstArgs<{ instanceResource: { labels: Record<string, string> } }>(
+      fake,
+      'instances.insert',
+    ).instanceResource.labels;
+    expect(labels[DNS_HOST_LABEL]).toBe(DNS);
+  });
+
+  it('list surfaces dnsHost for a live server', async () => {
+    const { p } = provider({
+      instancesByZone: {
+        'us-central1-a': [runningInstance({ labels: { [SERVER_LABEL]: ID, [DNS_HOST_LABEL]: DNS } })],
+      },
+    });
+    const row = (await p.list()).find((s) => s.id === ID);
+    expect(row?.dnsHost).toBe(DNS);
+  });
+
+  it('setDnsHost on a running server stamps the instance label', async () => {
+    const { p, fake } = provider({
+      instancesByZone: {
+        'us-central1-a': [runningInstance({ labels: { [SERVER_LABEL]: ID }, labelFingerprint: 'fp' })],
+      },
+    });
+    await p.setDnsHost(ID, DNS);
+    const labels = firstArgs<{
+      instancesSetLabelsRequestResource: { labels: Record<string, string> };
+    }>(fake, 'instances.setLabels').instancesSetLabelsRequestResource.labels;
+    expect(labels[DNS_HOST_LABEL]).toBe(DNS);
+  });
+
+  it('setDnsHost --clear removes the instance label', async () => {
+    const { p, fake } = provider({
+      instancesByZone: {
+        'us-central1-a': [
+          runningInstance({ labels: { [SERVER_LABEL]: ID, [DNS_HOST_LABEL]: DNS }, labelFingerprint: 'fp' }),
+        ],
+      },
+    });
+    await p.setDnsHost(ID, undefined);
+    const labels = firstArgs<{
+      instancesSetLabelsRequestResource: { labels: Record<string, string> };
+    }>(fake, 'instances.setLabels').instancesSetLabelsRequestResource.labels;
+    expect(labels[DNS_HOST_LABEL]).toBeUndefined();
+  });
+
+  it('setDnsHost on a stopped server stamps the latest snapshot label', async () => {
+    const { p, fake } = provider({
+      instancesByZone: {},
+      snapshots: [
+        {
+          name: snapshotName(ID, 1000),
+          labels: { [SERVER_LABEL]: instanceName(ID) },
+          labelFingerprint: 'sfp',
+          creationTimestamp: '2024-01-01T00:00:00Z',
+        },
+      ],
+    });
+    await p.setDnsHost(ID, DNS);
+    const labels = firstArgs<{
+      globalSetLabelsRequestResource: { labels: Record<string, string> };
+    }>(fake, 'snapshots.setLabels').globalSetLabelsRequestResource.labels;
+    expect(labels[DNS_HOST_LABEL]).toBe(DNS);
   });
 });
 

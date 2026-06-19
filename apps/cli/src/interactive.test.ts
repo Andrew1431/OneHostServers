@@ -52,7 +52,7 @@ vi.mock('@onehost/gcp', async (importActual) => {
 });
 
 // Imported after the mocks are declared (vi.mock is hoisted regardless).
-const { createInteractively, startInteractively, validatePortsInput, parsePortsInput } =
+const { createInteractively, startInteractively, validatePortsInput, parsePortsInput, validateDnsInput } =
   await import('./interactive.ts');
 
 const cfg: GcpConfig = {
@@ -72,7 +72,7 @@ describe('createInteractively', () => {
   it('builds the spec from a predefined machine choice and provisions', async () => {
     const provider = new InMemoryProvider();
     h.selectQ = ['e2', 'e2-standard-2', 'pd-balanced']; // family, size, disk type
-    h.textQ = ['20', 'tcp:25565']; // disk size, ports
+    h.textQ = ['20', 'tcp:25565', '']; // disk size, ports, dns (blank = none)
     h.confirmQ = [true]; // confirm create
 
     await createInteractively(provider, { id: 'vanilla', cfg });
@@ -97,7 +97,7 @@ describe('createInteractively', () => {
     const provider = new InMemoryProvider();
     // family, __custom__, vCPUs, RAM-per-vCPU, disk type
     h.selectQ = ['e2', '__custom__', '4', '2', 'pd-ssd'];
-    h.textQ = ['30', '']; // disk size, blank ports
+    h.textQ = ['30', '', '']; // disk size, blank ports, blank dns
     h.confirmQ = [true];
 
     await createInteractively(provider, { id: 'custom', cfg });
@@ -112,10 +112,25 @@ describe('createInteractively', () => {
     expect(spec.ports).toEqual([]);
   });
 
+  it('sets the dns spec when a DuckDNS hostname is entered', async () => {
+    const provider = new InMemoryProvider();
+    h.selectQ = ['e2', 'e2-standard-2', 'pd-balanced'];
+    h.textQ = ['20', '', 'My-MC.duckdns.org']; // disk, ports, dns (full domain + caps)
+    h.confirmQ = [true];
+
+    await createInteractively(provider, { id: 'mc', cfg });
+
+    const spec = provider.calls.find((c) => c.method === 'create')!.args[0] as {
+      dns?: { provider: string; hostname: string };
+    };
+    // Normalized: suffix stripped, lowercased.
+    expect(spec.dns).toEqual({ provider: 'duckdns', hostname: 'my-mc' });
+  });
+
   it('does not provision when the final confirm is declined', async () => {
     const provider = new InMemoryProvider();
     h.selectQ = ['e2', 'e2-standard-2', 'pd-balanced'];
-    h.textQ = ['20', ''];
+    h.textQ = ['20', '', ''];
     h.confirmQ = [false];
 
     await createInteractively(provider, { id: 'declined', cfg });
@@ -188,6 +203,18 @@ describe('validatePortsInput', () => {
     ['udp:200-100', 'reversed range'],
   ])('rejects %s (%s)', (raw) => {
     expect(validatePortsInput(raw)).toBeTypeOf('string');
+  });
+});
+
+describe('validateDnsInput', () => {
+  it('accepts blank and well-formed subdomains', () => {
+    expect(validateDnsInput('')).toBeUndefined();
+    expect(validateDnsInput('my-mc')).toBeUndefined();
+    expect(validateDnsInput('My-MC.duckdns.org')).toBeUndefined();
+  });
+
+  it('rejects an invalid hostname', () => {
+    expect(validateDnsInput('bad host!')).toBeTypeOf('string');
   });
 });
 

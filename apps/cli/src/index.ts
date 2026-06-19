@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import type { ServerSummary } from '@onehost/core';
 import { viewServer } from '@onehost/core';
 import { GcpServerProvider } from '@onehost/gcp';
+import { dnsProviderFromEnv } from '@onehost/dns';
 import { loadGcpConfig, writeConfig, envFilePath } from './config.ts';
 import { createInteractively, startInteractively } from './interactive.ts';
 import { runInit } from './init.ts';
@@ -12,6 +13,7 @@ import {
   parsePorts,
   parseStartOpts,
   parseSweepOpts,
+  parseDnsHost,
   buildSpec,
 } from './parse.ts';
 
@@ -48,6 +50,9 @@ async function main(): Promise<void> {
       const spec = buildSpec(id, parseFlags(rest));
       const running = await provider.create(spec);
       console.log(`✅ created '${id}' — reachable at ${running.address}`);
+      // create boots straight to RUNNING, so write the first A record now (the
+      // worker handles it on later start/stop). Best-effort; opt-in via DUCKDNS_TOKEN.
+      if (running.dnsHost) await announceDns(running.dnsHost, running.address);
       console.log('   SSH in and install your game, then `stop` to snapshot it.');
       break;
     }
@@ -62,6 +67,7 @@ async function main(): Promise<void> {
       }
       const running = await provider.start(id, parseStartOpts(rest));
       console.log(`✅ started '${id}' — reachable at ${running.address}`);
+      if (running.dnsHost) await announceDns(running.dnsHost, running.address);
       break;
     }
     case 'stop': {
@@ -98,7 +104,12 @@ async function main(): Promise<void> {
     case 'status': {
       if (!id) return fail('status needs a server id');
       const status = await provider.status(id);
-      console.log(`${id}: ${status.state}${status.address ? ` @ ${status.address}` : ''}`);
+      // dnsHost lives on the summary, not ServerStatus — one list lookup so status
+      // shows the stable name alongside the IP when DNS is enabled.
+      const dnsHost = (await provider.list()).find((s) => s.id === id)?.dnsHost;
+      const addr = status.address ? ` @ ${status.address}` : '';
+      const dns = dnsHost ? ` (${dnsHost}.duckdns.org)` : '';
+      console.log(`${id}: ${status.state}${addr}${dns}`);
       break;
     }
     case 'ssh': {
@@ -131,6 +142,30 @@ async function main(): Promise<void> {
         console.log(`✅ '${id}' now opens ${list}`);
         console.log('   Running servers apply this live; a stopped one picks it up on next start.');
       }
+      break;
+    }
+    case 'dns': {
+      if (!id) return fail('dns needs a server id');
+      // `dns <id> --clear` removes the stable address; `dns <id> <hostname>` sets it.
+      // The retrofit for servers created before DNS existed (mirrors `ports`).
+      const clearing = rest.includes('--clear');
+      if (!clearing && !rest[0]) return fail('dns needs a hostname, or --clear');
+
+      if (clearing) {
+        // Grab the host (and whether it's live) before we drop the label, so we can
+        // also clear the actual record.
+        const before = (await provider.list()).find((s) => s.id === id);
+        await provider.setDnsHost(id, undefined);
+        if (before?.dnsHost) await removeDns(before.dnsHost);
+        console.log(`✅ '${id}' — stable address removed`);
+      } else {
+        const hostname = parseDnsHost(rest[0]!);
+        await provider.setDnsHost(id, hostname);
+        const summary = (await provider.list()).find((s) => s.id === id);
+        if (summary?.address) await announceDns(hostname, summary.address);
+        else console.log(`✅ '${id}' now resolves at ${hostname}.duckdns.org`);
+      }
+      console.log('   Running servers apply this live; a stopped one picks it up on next start.');
       break;
     }
     case 'destroy': {
@@ -166,6 +201,38 @@ function runConfig(args: string[]): void {
   for (const [k, v] of Object.entries(updates)) console.log(`   ${k}=${v}`);
 }
 
+/**
+ * Write the A record for a freshly-booted server and print the stable name. The
+ * CLI has env creds, so it does the upsert directly (the worker owns later
+ * start/stop). Best-effort: a DNS hiccup doesn't fail the command. If DNS is
+ * unconfigured (no DUCKDNS_TOKEN), we still print the name and a hint.
+ */
+async function announceDns(host: string, ip: string): Promise<void> {
+  const dns = await dnsProviderFromEnv();
+  const domain = `${host}.duckdns.org`;
+  if (!dns) {
+    console.log(`   DNS: ${domain} (set DUCKDNS_TOKEN to publish the record)`);
+    return;
+  }
+  try {
+    await dns.upsertAddress(host, ip);
+    console.log(`   DNS: ${domain} → ${ip}`);
+  } catch (err) {
+    console.log(`   DNS: ${domain} — update failed: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+/** Clear a server's A record (best-effort; mirrors {@link announceDns}). */
+async function removeDns(host: string): Promise<void> {
+  const dns = await dnsProviderFromEnv();
+  if (!dns?.removeAddress) return;
+  try {
+    await dns.removeAddress(host);
+  } catch (err) {
+    console.log(`   DNS: clearing ${host}.duckdns.org failed: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
 function printServers(servers: ServerSummary[]): void {
   if (servers.length === 0) {
     console.log('No servers. `create <id>` to make one.');
@@ -178,6 +245,7 @@ function printServers(servers: ServerSummary[]): void {
       STATE: v.state,
       ZONE: v.zone,
       ADDRESS: v.address,
+      DNS: v.dns,
       MACHINE: v.machine,
       DISK: v.disk,
     };
@@ -200,6 +268,7 @@ function usage(): void {
       '  create [<id>]                                                # interactive picker (TTY)',
       '  create <id> [--vcpus 2] [--memory 4096] [--disk 20]         # non-interactive',
       '              [--disk-type pd-balanced] [--machine n2-standard-4] [--port tcp:25565]',
+      '              [--dns <duckdns-host>]                           # opt-in stable address',
       '              [-i|--interactive]                               # force the picker',
       '  start <id>  [--disk-type pd-ssd] [--machine c2-standard-4]   # override to upgrade',
       '              [--disk 40]                                      # grow boot disk (GB, >= snapshot)',
@@ -207,6 +276,7 @@ function usage(): void {
       '  stop <id>',
       '  status <id>',
       '  ports <id> [--port udp:15636-15637] [--port tcp:80,443]      # set open ports (CLI-only); ranges N-M and lists N,M ok; no --port clears them',
+      '  dns <id> <duckdns-host> | --clear                            # set/remove the stable address on an existing server',
       '  ssh <id> [-- <remote command>]                               # gcloud compute ssh into it',
       '  list                                                         # all servers, all zones',
       '  sweep [--max-uptime <h>] [--autostop <h>]                    # flag/auto-stop long-running servers',
