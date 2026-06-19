@@ -1,4 +1,4 @@
-export { GcpServerProvider } from './provider.ts';
+export { GcpServerProvider, defaultClients, type GcpClients } from './provider.ts';
 export { GcpCatalog, type MachineTypeInfo } from './catalog.ts';
 export {
   estimate,

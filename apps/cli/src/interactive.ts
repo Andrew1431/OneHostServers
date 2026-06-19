@@ -201,7 +201,7 @@ async function selectDiskSize(): Promise<number | null> {
  * `tcp:25565 udp:15636-15637,27015`). Blank = no ports. Returns an error string
  * (for clack's validate) or undefined when valid.
  */
-function validatePortsInput(raw: string): string | undefined {
+export function validatePortsInput(raw: string): string | undefined {
   if (!raw.trim()) return undefined;
   for (const entry of raw.trim().split(/\s+/)) {
     const [proto, spec] = entry.split(':');
@@ -218,7 +218,7 @@ function validatePortsInput(raw: string): string | undefined {
 }
 
 /** Parse a ports entry already passed {@link validatePortsInput}. */
-function parsePortsInput(raw: string): ServerSpec['ports'] {
+export function parsePortsInput(raw: string): ServerSpec['ports'] {
   const ports: ServerSpec['ports'] = [];
   if (!raw.trim()) return ports;
   for (const entry of raw.trim().split(/\s+/)) {
