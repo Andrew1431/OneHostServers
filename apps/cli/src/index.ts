@@ -1,12 +1,19 @@
 #!/usr/bin/env tsx
 import { spawnSync } from 'node:child_process';
-import type { ServerSpec, MachineSpec, ServerSummary } from '@onehost/core';
+import type { ServerSummary } from '@onehost/core';
 import { viewServer } from '@onehost/core';
-import type { StartOptions, ReconcileOptions } from '@onehost/provider-api';
 import { GcpServerProvider } from '@onehost/gcp';
 import { loadGcpConfig, writeConfig, envFilePath } from './config.ts';
 import { createInteractively, startInteractively } from './interactive.ts';
 import { runInit } from './init.ts';
+import {
+  UsageError,
+  parseFlags,
+  parsePorts,
+  parseStartOpts,
+  parseSweepOpts,
+  buildSpec,
+} from './parse.ts';
 
 /**
  * Bare-bones CLI to drive the GCP provider directly — your hands-on GCP surface
@@ -137,135 +144,6 @@ async function main(): Promise<void> {
   }
 }
 
-interface Flags {
-  vcpus: number;
-  memory: number;
-  disk: number;
-  diskType: string;
-  machine?: string;
-  ports: ServerSpec['ports'];
-}
-
-function parseFlags(args: string[]): Flags {
-  const flags: Flags = { vcpus: 2, memory: 4096, disk: 20, diskType: 'pd-balanced', ports: [] };
-  for (let i = 0; i < args.length; i += 2) {
-    const key = args[i];
-    const value = args[i + 1];
-    if (value === undefined) break;
-    switch (key) {
-      case '--vcpus':
-        flags.vcpus = Number(value);
-        break;
-      case '--memory':
-        flags.memory = Number(value);
-        break;
-      case '--disk':
-        flags.disk = Number(value);
-        break;
-      case '--disk-type':
-        flags.diskType = value;
-        break;
-      case '--machine':
-        flags.machine = value;
-        break;
-      case '--port':
-        flags.ports.push(...parsePortFlag(value));
-        break;
-      default:
-        return fail(`unknown flag: ${key}`);
-    }
-  }
-  return flags;
-}
-
-/** Only includes overrides the user explicitly passed, so a plain `start`
- *  preserves whatever the snapshot remembers. */
-function parseStartOpts(args: string[]): StartOptions {
-  const opts: StartOptions = {};
-  for (let i = 0; i < args.length; i += 2) {
-    const key = args[i];
-    const value = args[i + 1];
-    if (value === undefined) break;
-    if (key === '--machine') opts.machineType = value;
-    else if (key === '--disk-type') opts.diskType = value;
-    else if (key === '--disk') {
-      const gb = Number(value);
-      if (!Number.isInteger(gb) || gb <= 0) return fail(`--disk needs a positive integer (GB)`);
-      opts.diskSizeGb = gb;
-    } else return fail(`unknown flag: ${key}`);
-  }
-  return opts;
-}
-
-/** Parse `--port tcp:25565` flags for the `ports` command. No ports => clear the rule. */
-function parsePorts(args: string[]): ServerSpec['ports'] {
-  const ports: ServerSpec['ports'] = [];
-  for (let i = 0; i < args.length; i += 2) {
-    const key = args[i];
-    const value = args[i + 1];
-    if (value === undefined) break;
-    if (key !== '--port') return fail(`unknown flag: ${key}`);
-    ports.push(...parsePortFlag(value));
-  }
-  return ports;
-}
-
-/**
- * Parse one `--port` value into rules. Accepts `proto:spec` where spec is a
- * comma-separated list of single ports and/or inclusive ranges:
- *   tcp:25565            tcp:80,443            udp:15636-15637,27015
- * Each list item becomes its own rule (GCP firewall port tokens are 1:1 with these).
- */
-function parsePortFlag(value: string): ServerSpec['ports'] {
-  const [protocol, spec] = value.split(':');
-  if (protocol !== 'tcp' && protocol !== 'udp') return fail(`bad --port: ${value} (want tcp:… or udp:…)`);
-  if (!spec) return fail(`bad --port: ${value} (missing port)`);
-  return spec.split(',').map((token) => {
-    if (!/^\d+(-\d+)?$/.test(token)) return fail(`bad --port: '${token}' in ${value} (use N or N-M)`);
-    const bounds = token.split('-').map(Number);
-    if (bounds.some((n) => n < 1 || n > 65535)) return fail(`port out of range in ${value} (1-65535)`);
-    if (bounds.length === 2 && bounds[0]! > bounds[1]!) return fail(`reversed range in ${value}`);
-    return { protocol, port: token };
-  });
-}
-
-/** Sweep thresholds: flags win, else the ONEHOST_*_UPTIME_HOURS env, else off. */
-function parseSweepOpts(args: string[]): ReconcileOptions {
-  const opts: ReconcileOptions = {
-    maxUptimeHours: Number(process.env.ONEHOST_MAX_UPTIME_HOURS ?? 0),
-    autoStopUptimeHours: Number(process.env.ONEHOST_AUTOSTOP_UPTIME_HOURS ?? 0),
-  };
-  for (let i = 0; i < args.length; i += 2) {
-    const key = args[i];
-    const value = args[i + 1];
-    if (value === undefined) break;
-    if (key === '--max-uptime') opts.maxUptimeHours = Number(value);
-    else if (key === '--autostop') opts.autoStopUptimeHours = Number(value);
-    else return fail(`unknown flag: ${key}`);
-  }
-  if (Number.isNaN(opts.maxUptimeHours) || Number.isNaN(opts.autoStopUptimeHours ?? 0)) {
-    return fail('--max-uptime / --autostop need a number of hours');
-  }
-  return opts;
-}
-
-function buildSpec(id: string, flags: Flags): ServerSpec {
-  const machine: MachineSpec = {
-    vcpus: flags.vcpus,
-    memoryMb: flags.memory,
-    diskGb: flags.disk,
-    diskType: flags.diskType,
-    ...(flags.machine ? { type: flags.machine } : {}),
-  };
-  return {
-    id,
-    ownerDiscordId: 'cli',
-    region: process.env.GCP_ZONE?.replace(/-[a-z]$/, '') ?? 'us-central1',
-    machine,
-    ports: flags.ports,
-  };
-}
-
 /** `config --project <id> [--zone <zone>]` — persist to the repo-root `.env`. */
 function runConfig(args: string[]): void {
   const updates: Record<string, string> = {};
@@ -350,6 +228,9 @@ function fail(message: string): never {
 }
 
 main().catch((err: unknown) => {
+  // Bad user input surfaces as the same `✗ <message>` + exit(1) the parsers
+  // produced before they were extracted to throw instead of exiting in place.
+  if (err instanceof UsageError) return fail(err.message);
   console.error(err instanceof Error ? err.message : err);
   process.exit(1);
 });
