@@ -142,6 +142,12 @@ autostop_uptime_hours = 0   # also auto-stop at this many hours (0 = warn only)
 #   Scheduler (e.g. northamerica-northeast2 / Toronto); it just publishes to the
 #   global topic, so it need not match your compute region.
 
+# Optional: stable address (DuckDNS). Blank = off (servers keep their bare
+# ephemeral IP). When set, it's stored in Secret Manager and the worker upserts an
+# A record on start / clears it on stop. Get a token at https://www.duckdns.org;
+# per-server hostnames are chosen at `create --dns <host>` (or `cli dns <id>`).
+duckdns_token = ""
+
 interactions_image = "northamerica-northeast2-docker.pkg.dev/PROJECT/onehost/interactions:latest"
 worker_image       = "northamerica-northeast2-docker.pkg.dev/PROJECT/onehost/worker:latest"
 ```

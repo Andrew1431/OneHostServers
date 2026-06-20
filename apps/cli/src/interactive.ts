@@ -1,6 +1,7 @@
 import * as p from '@clack/prompts';
 import type { ServerSpec } from '@onehost/core';
 import type { ServerProvider, StartOptions } from '@onehost/provider-api';
+import { dnsProviderFromEnv } from '@onehost/dns';
 import {
   GcpCatalog,
   type GcpConfig,
@@ -12,6 +13,7 @@ import {
   HOURS_PER_MONTH,
   PRICED_REGION,
 } from '@onehost/gcp';
+import { parseDnsHost, UsageError } from './parse.ts';
 
 /**
  * Curated machine families ordered by gaming "power level". Cost and core count
@@ -228,6 +230,35 @@ export function parsePortsInput(raw: string): ServerSpec['ports'] {
   return ports;
 }
 
+/** Clack validator for the optional DuckDNS hostname (blank = none). */
+export function validateDnsInput(raw: string): string | undefined {
+  if (!raw.trim()) return undefined;
+  try {
+    parseDnsHost(raw.trim());
+    return undefined;
+  } catch (err) {
+    return err instanceof UsageError ? err.message.replace(/^bad --dns: /, '') : 'invalid hostname';
+  }
+}
+
+/**
+ * Publish a freshly-created server's A record, best-effort. Mirrors the
+ * non-interactive `announceDns` in index.ts; lives here so the interactive flow
+ * doesn't reach back into the command module.
+ */
+async function publishDns(host: string, ip: string): Promise<void> {
+  const dns = await dnsProviderFromEnv();
+  if (!dns) {
+    p.log.warn(`DNS: ${host}.duckdns.org — set DUCKDNS_TOKEN to publish the record`);
+    return;
+  }
+  try {
+    await dns.upsertAddress(host, ip);
+  } catch (err) {
+    p.log.warn(`DNS: updating ${host}.duckdns.org failed: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
 /**
  * Interactive `create`: pick machine + disk from live GCP lists with gaming
  * power-tier blurbs and on-demand cost estimates, declare open ports, confirm,
@@ -279,6 +310,18 @@ export async function createInteractively(
   if (cancelled(portsAnswer)) return;
   const ports = parsePortsInput(portsAnswer);
 
+  // --- stable address (opt-in) ----------------------------------------------
+  // A DuckDNS subdomain that follows the server's IP across stop/start. Blank to
+  // keep the bare ephemeral IP (which changes every start).
+  const dnsAnswer = await p.text({
+    message: 'Stable address (DuckDNS subdomain, optional)',
+    placeholder: 'e.g. my-mc  →  my-mc.duckdns.org   (blank = none)',
+    defaultValue: '',
+    validate: validateDnsInput,
+  });
+  if (cancelled(dnsAnswer)) return;
+  const dnsHost = dnsAnswer.trim() ? parseDnsHost(dnsAnswer.trim()) : undefined;
+
   // --- summary + confirm -----------------------------------------------------
   const est = estimate({ region, machineType, vcpus, memoryMb, diskType, diskGb });
   const monthly = est.monthlyTotal === undefined ? '?' : `~$${est.monthlyTotal.toFixed(0)}/mo`;
@@ -288,6 +331,7 @@ export async function createInteractively(
       `machine   ${machineType}  (${vcpus} vCPU / ${(memoryMb / 1024).toFixed(0)} GB)`,
       `disk      ${diskGb} GB ${diskType}`,
       `ports     ${ports.length ? ports.map((pr) => `${pr.protocol}:${pr.port}`).join(', ') : '(none — SSH only)'}`,
+      `dns       ${dnsHost ? `${dnsHost}.duckdns.org` : '(none — bare IP)'}`,
       `compute   ${fmtHr(est.computeHr)}`,
       `disk      ${fmtHr(est.diskHr)}`,
       `total     ${fmtHr(est.totalHr)}  (${monthly} if left running)`,
@@ -307,6 +351,7 @@ export async function createInteractively(
     region,
     machine: { vcpus, memoryMb, diskGb, diskType, type: machineType },
     ports,
+    ...(dnsHost ? { dns: { provider: 'duckdns' as const, hostname: dnsHost } } : {}),
   };
 
   const create = p.spinner();
@@ -314,7 +359,10 @@ export async function createInteractively(
   try {
     const running = await provider.create(spec);
     create.stop(`Created '${id}'`);
-    p.outro(`Reachable at ${running.address} — SSH in, install your game, then \`stop\` to snapshot it.`);
+    // create boots to RUNNING, so publish the first A record now (best-effort).
+    if (running.dnsHost) await publishDns(running.dnsHost, running.address);
+    const where = running.dnsHost ? `${running.dnsHost}.duckdns.org (${running.address})` : running.address;
+    p.outro(`Reachable at ${where} — SSH in, install your game, then \`stop\` to snapshot it.`);
   } catch (err) {
     create.stop('Provisioning failed', 1);
     throw err;

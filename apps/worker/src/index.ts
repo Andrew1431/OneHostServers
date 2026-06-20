@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { GcpServerProvider, configFromEnv } from '@onehost/gcp';
+import { dnsProviderFromEnv } from '@onehost/dns';
 import { parsePushBody, type Job } from '@onehost/jobs';
 import { handleJob, makeNotify, type DiscordMessage, type WorkerDeps } from './handler.ts';
 
@@ -77,9 +78,12 @@ async function postWebhook(message: DiscordMessage): Promise<void> {
 
 // --- HTTP transport (Pub/Sub push) -----------------------------------------
 
+// undefined when no DUCKDNS_TOKEN is set — DNS is opt-in, jobs run as before.
+const dns = await dnsProviderFromEnv();
 const deps: WorkerDeps = {
   provider: new GcpServerProvider(configFromEnv()),
   notify: makeNotify(editOriginal, postWebhook),
+  ...(dns ? { dns } : {}),
 };
 
 const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {

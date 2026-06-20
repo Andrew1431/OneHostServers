@@ -41,7 +41,8 @@ export type ProviderMethod =
   | 'destroy'
   | 'status'
   | 'list'
-  | 'reconcile';
+  | 'reconcile'
+  | 'setDnsHost';
 
 /** One recorded invocation. `args` is the positional argument list as called. */
 export interface RecordedCall {
@@ -55,6 +56,7 @@ interface ServerEntry {
   address?: string;
   machineType?: string;
   diskType?: string;
+  dnsHost?: string;
   /** Hours the current run has been up — drives reconcile. Default 0. */
   uptimeHours: number;
   snapshots: number;
@@ -65,6 +67,7 @@ export interface SeedServer {
   address?: string;
   machineType?: string;
   diskType?: string;
+  dnsHost?: string;
   uptimeHours?: number;
   snapshots?: number;
 }
@@ -114,6 +117,7 @@ export class InMemoryProvider implements ServerProvider {
       ...(entry.address !== undefined ? { address: entry.address } : {}),
       ...(entry.machineType !== undefined ? { machineType: entry.machineType } : {}),
       ...(entry.diskType !== undefined ? { diskType: entry.diskType } : {}),
+      ...(entry.dnsHost !== undefined ? { dnsHost: entry.dnsHost } : {}),
     });
     return this;
   }
@@ -153,6 +157,7 @@ export class InMemoryProvider implements ServerProvider {
     const from = existing?.state ?? 'STOPPED';
     nextState(from, 'start'); // STOPPED→STARTING (throws if already live)
     const address = `10.0.0.${(this.servers.size % 254) + 1}`;
+    const dnsHost = spec.dns?.hostname ?? existing?.dnsHost;
     this.servers.set(spec.id, {
       state: 'RUNNING',
       address,
@@ -160,8 +165,9 @@ export class InMemoryProvider implements ServerProvider {
       diskType: spec.machine.diskType,
       uptimeHours: 0,
       snapshots: existing?.snapshots ?? 0,
+      ...(dnsHost !== undefined ? { dnsHost } : {}),
     });
-    return { id: spec.id, address };
+    return { id: spec.id, address, ...(dnsHost !== undefined ? { dnsHost } : {}) };
   }
 
   async start(id: ServerId, opts?: StartOptions): Promise<RunningServer> {
@@ -175,7 +181,7 @@ export class InMemoryProvider implements ServerProvider {
     entry.uptimeHours = 0;
     if (opts?.machineType !== undefined) entry.machineType = opts.machineType;
     if (opts?.diskType !== undefined) entry.diskType = opts.diskType;
-    return { id, address };
+    return { id, address, ...(entry.dnsHost !== undefined ? { dnsHost: entry.dnsHost } : {}) };
   }
 
   async stop(id: ServerId, opts?: StopOptions): Promise<void> {
@@ -201,6 +207,17 @@ export class InMemoryProvider implements ServerProvider {
     this.servers.delete(id);
   }
 
+  /**
+   * Set/clear the remembered DuckDNS host (CLI retrofit). Concrete, not on the
+   * seam — mirrors {@link GcpServerProvider.setDnsHost} so CLI tests can drive it.
+   */
+  async setDnsHost(id: ServerId, hostname?: string): Promise<void> {
+    this.record('setDnsHost', id, hostname);
+    const entry = this.require(id);
+    if (hostname) entry.dnsHost = hostname;
+    else delete entry.dnsHost;
+  }
+
   async status(id: ServerId): Promise<ServerStatus> {
     this.record('status', id);
     this.maybeFail('status');
@@ -220,6 +237,7 @@ export class InMemoryProvider implements ServerProvider {
       ...(e.address !== undefined ? { address: e.address } : {}),
       ...(e.machineType !== undefined ? { machineType: e.machineType } : {}),
       ...(e.diskType !== undefined ? { diskType: e.diskType } : {}),
+      ...(e.dnsHost !== undefined ? { dnsHost: e.dnsHost } : {}),
     }));
   }
 

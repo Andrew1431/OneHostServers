@@ -32,6 +32,9 @@ importers:
       '@onehost/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@onehost/dns':
+        specifier: workspace:*
+        version: link:../../packages/dns
       '@onehost/gcp':
         specifier: workspace:*
         version: link:../../packages/gcp
@@ -76,6 +79,9 @@ importers:
       '@onehost/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@onehost/dns':
+        specifier: workspace:*
+        version: link:../../packages/dns
       '@onehost/gcp':
         specifier: workspace:*
         version: link:../../packages/gcp
@@ -100,6 +106,15 @@ importers:
         version: 3.2.6(@types/node@24.13.2)(tsx@4.22.4)
 
   packages/core:
+    devDependencies:
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.6(@types/node@24.13.2)(tsx@4.22.4)
+
+  packages/dns:
     devDependencies:
       typescript:
         specifier: ^5.6.0

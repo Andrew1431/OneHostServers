@@ -1,8 +1,13 @@
 # Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+# Minimum to apply just the network + firewall: project_id + region, with both
+# enable_control_plane and enable_bot = false.
+
+# --- Required ---
 project_id = "your-gcp-project-id"
 region     = "us-central1"
 
-# Lock this to your own IP for safety, e.g. ["203.0.113.4/32"]
+# Lock this to your own IP for safety, e.g. ["203.0.113.4/32"].
+# Default below is open to the world — fine for testing, not for keeps.
 ssh_source_ranges = ["0.0.0.0/0"]
 
 # Game ports are per-server now — opened by the provider on a per-server firewall
@@ -23,15 +28,25 @@ default_zone           = "us-central1-a"
 discord_application_id = "000000000000000000"
 discord_public_key     = "your-app-public-key"
 discord_channel_id     = "000000000000000000" # the one channel commands are allowed in
+
 # Optional: channel webhook so tokenless jobs (idle self-teardown, sweep) get announced.
 discord_channel_webhook_url = ""
 
-# Reconcile sweep (long-running-server nag + lost-idle-signal backstop). Leave
-# max_uptime_hours = 0 to not create the scheduler at all.
-max_uptime_hours      = 0           # warn once a server is up this many hours (0 = off)
-autostop_uptime_hours = 0           # also auto-stop at this many hours (0 = warn only)
+# --- Reconcile sweep (optional) ---
+# Long-running-server nag + lost-idle-signal backstop. Leave max_uptime_hours = 0
+# to skip creating the scheduler entirely.
+max_uptime_hours      = 0 # warn once a server is up this many hours (0 = off)
+autostop_uptime_hours = 0 # also auto-stop at this many hours (0 = warn only)
 # sweep_schedule      = "*/15 * * * *"  # cron (UTC); default every 15 min
-# sweep_location      = ""               # set if region lacks Cloud Scheduler
-#                                        # (e.g. northamerica-northeast2 → use northeast1)
-interactions_image     = "us-central1-docker.pkg.dev/PROJECT/onehost/interactions:latest"
-worker_image           = "us-central1-docker.pkg.dev/PROJECT/onehost/worker:latest"
+# sweep_location      = ""              # set if region lacks Cloud Scheduler
+#                                       # (e.g. northamerica-northeast2 → use northeast1)
+
+# --- Stable address / DNS (optional) ---
+# DuckDNS token. Blank = off. When set, stored in Secret Manager and injected
+# into the worker; per-server hostnames via `create --dns`.
+duckdns_token = ""
+
+# --- Container images (required when control plane or bot is enabled) ---
+# Replace PROJECT with project_id; push them first (pnpm build:images, see SETUP.md).
+interactions_image = "us-central1-docker.pkg.dev/PROJECT/onehost/interactions:latest"
+worker_image       = "us-central1-docker.pkg.dev/PROJECT/onehost/worker:latest"

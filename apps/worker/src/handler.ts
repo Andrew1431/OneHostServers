@@ -1,5 +1,6 @@
 import type { ServerId, ServerState, ServerSummary } from '@onehost/core';
 import type { ServerProvider, ReconcileReport } from '@onehost/provider-api';
+import type { DnsProvider } from '@onehost/dns';
 import { STATE_ICON, describeMachine, viewServer } from '@onehost/core';
 import type { Job } from '@onehost/jobs';
 
@@ -40,6 +41,13 @@ export interface WorkerDeps {
    * jobs have none). The default lives in `index.ts` ({@link makeNotify}).
    */
   notify: (job: Job, message: DiscordMessage) => Promise<void>;
+  /**
+   * DNS adapter, when the deployment has one configured (opt-in — `undefined`
+   * means DNS is off and start/stop behave exactly as before). On start we upsert
+   * the A record to the new IP; on stop we clear it. DNS failures are non-fatal:
+   * the VM op already succeeded, so we log and still report success.
+   */
+  dns?: DnsProvider;
 }
 
 /**
@@ -66,15 +74,27 @@ export async function handleJob(deps: WorkerDeps, job: Job): Promise<void> {
   try {
     switch (job.kind) {
       case 'start': {
-        await deps.provider.start(job.id);
+        const running = await deps.provider.start(job.id);
+        // Point the stable hostname at the fresh ephemeral IP. Best-effort: the box
+        // is up, so a DNS hiccup must not turn the reply into a failure.
+        if (deps.dns && running.dnsHost) {
+          await upsertDnsQuietly(deps.dns, running.dnsHost, running.address);
+        }
         await deps.notify(job, { embeds: [await startedEmbed(deps, job.id)] });
         break;
       }
       case 'stop': {
+        // Read the remembered host *before* stop deletes the instance, so we can
+        // clear the record afterward (hygiene: a stale A record could point players
+        // at whoever GCP reassigns the freed IP to — epic #13).
+        const dnsHost = deps.dns
+          ? (await deps.provider.list()).find((s) => s.id === job.id)?.dnsHost
+          : undefined;
         // allowAlreadyStopped: an idle self-teardown may race a manual /stop, and
         // at-least-once Pub/Sub can redeliver a stop we already ran — both should
         // read as success, not a scary "failed" reply (SHORTCUTS #6d).
         await deps.provider.stop(job.id, { allowAlreadyStopped: true });
+        if (deps.dns && dnsHost) await removeDnsQuietly(deps.dns, dnsHost);
         await deps.notify(job, {
           embeds: [
             {
@@ -126,6 +146,25 @@ export async function handleJob(deps: WorkerDeps, job: Job): Promise<void> {
 const MAX_UPTIME_HOURS = Number(process.env.ONEHOST_MAX_UPTIME_HOURS ?? 0);
 const AUTOSTOP_UPTIME_HOURS = Number(process.env.ONEHOST_AUTOSTOP_UPTIME_HOURS ?? 0);
 
+/** Upsert the A record, swallowing failures (the VM is already up — see start case). */
+async function upsertDnsQuietly(dns: DnsProvider, host: string, ip: string): Promise<void> {
+  try {
+    await dns.upsertAddress(host, ip);
+  } catch (err) {
+    console.error(`DNS upsert ${host} -> ${ip} failed (server is up regardless):`, err);
+  }
+}
+
+/** Clear the A record on stop, swallowing failures (low TTL already shrinks the window). */
+async function removeDnsQuietly(dns: DnsProvider, host: string): Promise<void> {
+  if (!dns.removeAddress) return;
+  try {
+    await dns.removeAddress(host);
+  } catch (err) {
+    console.error(`DNS clear ${host} failed (record will expire via TTL):`, err);
+  }
+}
+
 /**
  * Build the "started" embed. `start` returns only id + address, so we read the
  * live summary back to surface machine/zone detail (the start already took
@@ -146,6 +185,9 @@ async function startedEmbed(deps: WorkerDeps, id: ServerId): Promise<Embed> {
     color: STATE_COLOR[summary.state],
     fields: [
       { name: 'Address', value: `\`${v.address}\``, inline: true },
+      // Show the stable hostname next to the IP whenever DNS is enabled, so players
+      // can use either (some games only connect by IP — epic #13).
+      ...(summary.dnsHost ? [{ name: 'DNS', value: `\`${v.dns}\``, inline: true }] : []),
       { name: 'Zone', value: v.zone, inline: true },
       { name: 'Machine', value: v.machine },
       { name: 'Disk', value: v.disk, inline: true },
@@ -170,6 +212,7 @@ function listEmbed(servers: ServerSummary[]): Embed {
       const details = [`${describeMachine(s.machineType)} · ${v.disk}`];
       if (s.zone) details.push(`zone ${s.zone}`);
       details.push(v.address);
+      if (s.dnsHost) details.push(v.dns);
       return { name: `${v.icon} ${v.id} · ${v.state}`, value: details.join('\n') };
     }),
   };

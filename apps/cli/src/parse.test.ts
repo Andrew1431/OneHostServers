@@ -6,8 +6,26 @@ import {
   parsePortFlag,
   parseStartOpts,
   parseSweepOpts,
+  parseDnsHost,
   buildSpec,
 } from './parse.ts';
+
+describe('parseDnsHost', () => {
+  it('accepts a bare subdomain label', () => {
+    expect(parseDnsHost('my-mc')).toBe('my-mc');
+  });
+
+  it('strips a .duckdns.org suffix and lowercases', () => {
+    expect(parseDnsHost('My-MC.duckdns.org')).toBe('my-mc');
+  });
+
+  it.each([['bad host'], ['under_score'], ['-leading'], ['trailing-'], ['has.dot']])(
+    'rejects %s',
+    (raw) => {
+      expect(() => parseDnsHost(raw)).toThrow(UsageError);
+    },
+  );
+});
 
 describe('parsePortFlag', () => {
   it('parses a single port', () => {
@@ -212,6 +230,25 @@ describe('buildSpec', () => {
       machine: { vcpus: 4, memoryMb: 8192, diskGb: 40, diskType: 'pd-ssd' },
       ports: [{ protocol: 'tcp', port: '25565' }],
     });
+  });
+
+  it('includes dns only when --dns was passed', () => {
+    const withDns = buildSpec('mc', {
+      vcpus: 2,
+      memory: 4096,
+      disk: 20,
+      diskType: 'pd-balanced',
+      ports: [],
+      dns: 'my-mc',
+    });
+    expect(withDns.dns).toEqual({ provider: 'duckdns', hostname: 'my-mc' });
+
+    const noDns = buildSpec('mc', { vcpus: 2, memory: 4096, disk: 20, diskType: 'pd-balanced', ports: [] });
+    expect(noDns.dns).toBeUndefined();
+  });
+
+  it('parses --dns through parseFlags', () => {
+    expect(parseFlags(['--dns', 'My-MC.duckdns.org']).dns).toBe('my-mc');
   });
 
   it('includes machine.type only when set, and derives region from GCP_ZONE', () => {

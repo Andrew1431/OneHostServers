@@ -75,6 +75,66 @@ describe('stop', () => {
   });
 });
 
+describe('dns', () => {
+  function dnsSpec(id: string): ServerSpec {
+    return { ...spec(id), dns: { provider: 'duckdns', hostname: `${id}-host` } };
+  }
+  function fakeDns() {
+    return {
+      upsertAddress: vi.fn<(host: string, ip: string) => Promise<void>>(async () => {}),
+      removeAddress: vi.fn<(host: string) => Promise<void>>(async () => {}),
+    };
+  }
+
+  it('upserts the A record to the new IP on start', async () => {
+    await provider.create(dnsSpec('mc'));
+    await provider.stop('mc', { allowAlreadyStopped: true }); // back to STOPPED, host remembered
+    const dns = fakeDns();
+    const { deps } = makeDeps(provider);
+
+    await handleJob({ ...deps, dns }, { kind: 'start', id: 'mc' });
+
+    expect(dns.upsertAddress).toHaveBeenCalledOnce();
+    const [host, ip] = dns.upsertAddress.mock.calls[0]!;
+    expect(host).toBe('mc-host');
+    expect(ip).toEqual(expect.any(String));
+  });
+
+  it('clears the A record on stop', async () => {
+    await provider.create(dnsSpec('mc')); // RUNNING, host remembered
+    const dns = fakeDns();
+    const { deps } = makeDeps(provider);
+
+    await handleJob({ ...deps, dns }, { kind: 'stop', id: 'mc' });
+
+    expect(dns.removeAddress).toHaveBeenCalledWith('mc-host');
+  });
+
+  it('still reports success when the DNS upsert fails (non-fatal)', async () => {
+    await provider.create(dnsSpec('mc'));
+    await provider.stop('mc', { allowAlreadyStopped: true });
+    const dns = fakeDns();
+    dns.upsertAddress.mockRejectedValueOnce(new Error('duckdns down'));
+    const { deps, notify } = makeDeps(provider);
+
+    await handleJob({ ...deps, dns }, { kind: 'start', id: 'mc' });
+
+    expect(provider.peek('mc')?.state).toBe('RUNNING');
+    expect(notify.mock.calls[0]![1].embeds?.[0]?.title).toContain('mc is up');
+  });
+
+  it('does not touch DNS for a server without a hostname', async () => {
+    await provider.create(spec('plain')); // no dns
+    await provider.stop('plain', { allowAlreadyStopped: true });
+    const dns = fakeDns();
+    const { deps } = makeDeps(provider);
+
+    await handleJob({ ...deps, dns }, { kind: 'start', id: 'plain' });
+
+    expect(dns.upsertAddress).not.toHaveBeenCalled();
+  });
+});
+
 describe('list', () => {
   it('produces a list embed via notify', async () => {
     await provider.create(spec('a'));

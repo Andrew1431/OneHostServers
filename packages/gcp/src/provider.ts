@@ -30,6 +30,7 @@ import {
   SERVER_LABEL,
   MACHINE_LABEL,
   DISKTYPE_LABEL,
+  DNS_HOST_LABEL,
   NAGGED_LABEL,
   DEFAULT_DISK_TYPE,
   DEFAULT_MACHINE_TYPE,
@@ -159,6 +160,7 @@ export class GcpServerProvider implements ServerProvider {
     const name = instanceName(spec.id);
     const machineType = machineTypeName(spec.machine);
     const diskType = spec.machine.diskType;
+    const dnsHost = spec.dns?.hostname;
 
     // The server's own ingress rule (only its ports, targeting its per-server
     // tag). Global resource, so create it once up front — independent of which
@@ -181,6 +183,7 @@ export class GcpServerProvider implements ServerProvider {
             [SERVER_LABEL]: name,
             [MACHINE_LABEL]: machineType,
             [DISKTYPE_LABEL]: diskType,
+            ...(dnsHost ? { [DNS_HOST_LABEL]: dnsHost } : {}),
           },
           disks: [
             {
@@ -197,7 +200,11 @@ export class GcpServerProvider implements ServerProvider {
         },
       });
       await waitZonal(this.zoneOps, projectId, zone, resp);
-      return { id: spec.id, address: await this.requireAddress(spec.id, zone) };
+      return {
+        id: spec.id,
+        address: await this.requireAddress(spec.id, zone),
+        ...(dnsHost ? { dnsHost } : {}),
+      };
     });
   }
 
@@ -213,6 +220,8 @@ export class GcpServerProvider implements ServerProvider {
       opts.machineType ?? snapshot.labels[MACHINE_LABEL] ?? DEFAULT_MACHINE_TYPE;
     const diskType =
       opts.diskType ?? snapshot.labels[DISKTYPE_LABEL] ?? DEFAULT_DISK_TYPE;
+    // The DuckDNS host the snapshot remembers (absent ⇒ DNS not enabled).
+    const dnsHost = snapshot.labels[DNS_HOST_LABEL];
 
     const name = instanceName(id);
     // The snapshot is global, so a STOPPED server can restore into any zone with
@@ -255,6 +264,7 @@ export class GcpServerProvider implements ServerProvider {
               [SERVER_LABEL]: name,
               [MACHINE_LABEL]: machineType,
               [DISKTYPE_LABEL]: diskType,
+              ...(dnsHost ? { [DNS_HOST_LABEL]: dnsHost } : {}),
             },
             disks: [
               {
@@ -267,7 +277,11 @@ export class GcpServerProvider implements ServerProvider {
           },
         });
         await waitZonal(this.zoneOps, projectId, zone, instResp);
-        return { id, address: await this.requireAddress(id, zone) };
+        return {
+          id,
+          address: await this.requireAddress(id, zone),
+          ...(dnsHost ? { dnsHost } : {}),
+        };
       } catch (err) {
         // Anything failed after we may have created the disk — it's now attached
         // to nothing and would bill forever; remove it (no-op if it was never
@@ -299,8 +313,10 @@ export class GcpServerProvider implements ServerProvider {
     const sizing: Record<string, string> = { [SERVER_LABEL]: name };
     const machineLabel = instance.labels?.[MACHINE_LABEL];
     const diskLabel = instance.labels?.[DISKTYPE_LABEL];
+    const dnsLabel = instance.labels?.[DNS_HOST_LABEL];
     if (machineLabel) sizing[MACHINE_LABEL] = machineLabel;
     if (diskLabel) sizing[DISKTYPE_LABEL] = diskLabel;
+    if (dnsLabel) sizing[DNS_HOST_LABEL] = dnsLabel;
 
     // 0. Quiesce the guest so the snapshot is consistent. `instances.stop` sends
     //    an ACPI soft-off, which runs the VM's shutdown sequence (systemd stops
@@ -371,6 +387,50 @@ export class GcpServerProvider implements ServerProvider {
     await this.ensureFirewallRule(id, ports);
   }
 
+  /**
+   * Set (or clear, with `hostname` undefined) a server's remembered DuckDNS host —
+   * the CLI-only retrofit for servers created before DNS existed, mirroring
+   * `setPorts`. Stamps the {@link DNS_HOST_LABEL}: on the live instance if running
+   * (carries to the snapshot on next stop), otherwise on the latest snapshot so the
+   * next `start` restores it. Not on the cloud-agnostic seam — the DNS record write
+   * itself is the caller's (worker/CLI) job via `@onehost/dns`.
+   */
+  async setDnsHost(id: ServerId, hostname?: string): Promise<void> {
+    const { projectId } = this.cfg;
+    const found = await this.locate(id);
+    if (found !== undefined) {
+      const labels = withDnsLabel(found.instance.labels ?? {}, hostname);
+      const [resp] = await this.instances.setLabels({
+        project: projectId,
+        zone: found.zone,
+        instance: instanceName(id),
+        instancesSetLabelsRequestResource: {
+          labels,
+          labelFingerprint: found.instance.labelFingerprint ?? null,
+        },
+      });
+      await waitZonal(this.zoneOps, projectId, found.zone, resp);
+      return;
+    }
+
+    // Stopped: stamp the latest snapshot so the next start restores the host.
+    const snapshot = await this.latestSnapshotRecord(id);
+    if (snapshot === undefined) {
+      throw new Error(`Server '${id}' has no instance or snapshot — create it first`);
+    }
+    // setLabels needs the snapshot's current fingerprint; the list record omits it.
+    const [snap] = await this.snapshots.get({ project: projectId, snapshot: snapshot.name });
+    const [resp] = await this.snapshots.setLabels({
+      project: projectId,
+      resource: snapshot.name,
+      globalSetLabelsRequestResource: {
+        labels: withDnsLabel(snap.labels ?? {}, hostname),
+        labelFingerprint: snap.labelFingerprint ?? null,
+      },
+    });
+    await waitGlobal(this.globalOps, projectId, resp);
+  }
+
   async status(id: ServerId): Promise<ServerStatus> {
     const found = await this.locate(id);
     if (found === undefined) {
@@ -413,6 +473,7 @@ export class GcpServerProvider implements ServerProvider {
         const address = extractAddress(inst);
         const machineType = inst.labels?.[MACHINE_LABEL];
         const diskType = inst.labels?.[DISKTYPE_LABEL];
+        const dnsHost = inst.labels?.[DNS_HOST_LABEL];
         summaries.set(id, {
           id,
           state: mapInstanceStatus(inst.status ?? undefined),
@@ -420,6 +481,7 @@ export class GcpServerProvider implements ServerProvider {
           ...(address ? { address } : {}),
           ...(machineType ? { machineType } : {}),
           ...(diskType ? { diskType } : {}),
+          ...(dnsHost ? { dnsHost } : {}),
         });
       }
     }
@@ -438,11 +500,13 @@ export class GcpServerProvider implements ServerProvider {
     for (const [id, { labels }] of stopped) {
       const machineType = labels[MACHINE_LABEL];
       const diskType = labels[DISKTYPE_LABEL];
+      const dnsHost = labels[DNS_HOST_LABEL];
       summaries.set(id, {
         id,
         state: 'STOPPED',
         ...(machineType ? { machineType } : {}),
         ...(diskType ? { diskType } : {}),
+        ...(dnsHost ? { dnsHost } : {}),
       });
     }
 
@@ -742,6 +806,17 @@ export class GcpServerProvider implements ServerProvider {
     }
     return latest === undefined ? undefined : { name: latest.name, labels: latest.labels };
   }
+}
+
+/** Return a labels map with the DNS host set, or removed when `hostname` is undefined. */
+function withDnsLabel(
+  current: Record<string, string>,
+  hostname: string | undefined,
+): Record<string, string> {
+  const labels = { ...current };
+  if (hostname) labels[DNS_HOST_LABEL] = hostname;
+  else delete labels[DNS_HOST_LABEL];
+  return labels;
 }
 
 function mapInstanceStatus(status: string | undefined): ServerState {

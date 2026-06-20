@@ -21,6 +21,24 @@ export interface Flags {
   diskType: string;
   machine?: string;
   ports: ServerSpec['ports'];
+  /** DuckDNS subdomain label, if `--dns` was passed (opt-in stable address). */
+  dns?: string;
+}
+
+/**
+ * Validate + normalize a DuckDNS hostname into its bare subdomain label. Accepts
+ * either `myserver` or the full `myserver.duckdns.org` (the suffix is stripped).
+ * The label must be RFC1035 (lowercase alphanumeric + internal hyphens, ≤63) so it
+ * round-trips as a GCP label across stop/start.
+ */
+export function parseDnsHost(value: string): string {
+  const host = value.trim().toLowerCase().replace(/\.duckdns\.org$/, '');
+  if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(host) || host.length > 63) {
+    throw new UsageError(
+      `bad --dns: '${value}' (use a DuckDNS subdomain like 'myserver', lowercase letters/digits/hyphens)`,
+    );
+  }
+  return host;
 }
 
 export function parseFlags(args: string[]): Flags {
@@ -47,6 +65,9 @@ export function parseFlags(args: string[]): Flags {
         break;
       case '--port':
         flags.ports.push(...parsePortFlag(value));
+        break;
+      case '--dns':
+        flags.dns = parseDnsHost(value);
         break;
       default:
         throw new UsageError(`unknown flag: ${key}`);
@@ -145,5 +166,6 @@ export function buildSpec(id: string, flags: Flags): ServerSpec {
     region: process.env.GCP_ZONE?.replace(/-[a-z]$/, '') ?? 'us-central1',
     machine,
     ports: flags.ports,
+    ...(flags.dns ? { dns: { provider: 'duckdns' as const, hostname: flags.dns } } : {}),
   };
 }
