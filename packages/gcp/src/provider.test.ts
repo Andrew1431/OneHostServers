@@ -276,6 +276,30 @@ describe('sizing-label carry-forward', () => {
     const { p } = provider({ zones: threeZones, snapshots: [] });
     await expect(p.start(ID)).rejects.toThrow(/No snapshot/);
   });
+
+  it('start --persist stamps onehost-idle-disabled metadata; plain start omits it', async () => {
+    type Insert = {
+      instanceResource: { metadata: { items: { key: string; value: string }[] } };
+    };
+    const cfg = () => ({
+      zones: threeZones,
+      snapshots: [
+        { name: snapshotName(ID, 1000), labels: { [SERVER_LABEL]: instanceName(ID) }, creationTimestamp: '2024-01-01T00:00:00Z' },
+      ],
+      instancesByZone: { 'us-central1-a': [runningInstance()] },
+    });
+
+    const persisted = provider(cfg());
+    await persisted.p.start(ID, { persist: true });
+    const onItems = firstArgs<Insert>(persisted.fake, 'instances.insert').instanceResource.metadata.items;
+    expect(onItems).toContainEqual({ key: 'onehost-server-id', value: ID });
+    expect(onItems).toContainEqual({ key: 'onehost-idle-disabled', value: '1' });
+
+    const plain = provider(cfg());
+    await plain.p.start(ID);
+    const offItems = firstArgs<Insert>(plain.fake, 'instances.insert').instanceResource.metadata.items;
+    expect(offItems.map((i) => i.key)).not.toContain('onehost-idle-disabled');
+  });
 });
 
 describe('latest-snapshot selection', () => {

@@ -140,11 +140,19 @@ export class GcpServerProvider implements ServerProvider {
    *    the metadata server (MACHINE_AGENT.md checklist #4) — no baked-in config.
    *  - a `serviceAccounts` block iff a game-VM SA is configured, so an idle VM can
    *    publish its own stop. Scoped to pubsub only; the SA's IAM is the real gate.
+   *  - `metadata.onehost-idle-disabled` when `persist` is set, so the on-box idle
+   *    agent skips self-teardown for this run (MACHINE_AGENT.md). Per-instance, so
+   *    it naturally expires on the next plain start.
    */
-  private identity(serverId: ServerId) {
+  private identity(serverId: ServerId, persist = false) {
     const sa = this.cfg.gameVmServiceAccount;
     return {
-      metadata: { items: [{ key: 'onehost-server-id', value: serverId }] },
+      metadata: {
+        items: [
+          { key: 'onehost-server-id', value: serverId },
+          ...(persist ? [{ key: 'onehost-idle-disabled', value: '1' }] : []),
+        ],
+      },
       ...(sa
         ? {
             serviceAccounts: [
@@ -259,7 +267,7 @@ export class GcpServerProvider implements ServerProvider {
             // firewall write here — `start` runs on the worker, which has no
             // securityAdmin; rule lifecycle stays CLI-only.
             tags: { items: [this.cfg.networkTag, serverTag(id)] },
-            ...this.identity(id),
+            ...this.identity(id, opts.persist),
             labels: {
               [SERVER_LABEL]: name,
               [MACHINE_LABEL]: machineType,

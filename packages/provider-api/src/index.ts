@@ -29,6 +29,13 @@ export interface StartOptions {
    * The GCE guest auto-grows the root filesystem to fill the disk on boot.
    */
   diskSizeGb?: number;
+  /**
+   * Disable idle self-teardown for this run only. Stamps `onehost-idle-disabled`
+   * instance metadata; the on-box idle agent reads it and skips the stop signal
+   * (see MACHINE_AGENT.md). Metadata lives on the instance, not the snapshot, so
+   * it is inherently per-start — the next plain `start` runs idle teardown again.
+   */
+  persist?: boolean;
 }
 
 /** One-off overrides when stopping. */

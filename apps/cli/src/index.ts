@@ -272,6 +272,7 @@ function usage(): void {
       '              [-i|--interactive]                               # force the picker',
       '  start <id>  [--disk-type pd-ssd] [--machine c2-standard-4]   # override to upgrade',
       '              [--disk 40]                                      # grow boot disk (GB, >= snapshot)',
+      '              [--persist]                                      # disable idle self-teardown for this run',
       '              [-i|--interactive]                               # pick machine/disk override from a menu',
       '  stop <id>',
       '  status <id>',

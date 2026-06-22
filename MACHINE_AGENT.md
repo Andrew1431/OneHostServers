@@ -134,6 +134,17 @@ SERVER_ID="$(curl -s -H 'Metadata-Flavor: Google' \
 IDLE_LIMIT_MIN=15
 STATE_FILE=/run/onehost-empty-since
 
+meta() { curl -s -H 'Metadata-Flavor: Google' \
+  "http://metadata.google.internal/computeMetadata/v1/instance/attributes/$1" 2>/dev/null; }
+
+# Honor `start --persist`: the provider stamps `onehost-idle-disabled=1` for that
+# run only (per-instance metadata, gone on the next plain start). When set, never
+# self-stop — the operator explicitly asked to keep this box alive.
+if [[ "$(meta onehost-idle-disabled)" == "1" ]]; then
+  rm -f "$STATE_FILE"   # so the empty-timer starts clean once persist is lifted
+  exit 0
+fi
+
 players="$(count_players)"   # ← your game probe; 0 = idle (see below)
 
 if [[ "$players" -gt 0 ]]; then
@@ -212,6 +223,10 @@ Items 1–3 are required for safe snapshots; 4 is only for self-teardown.
 Provided automatically by the provider/Terraform (nothing to do by hand):
 
 - Instance metadata `onehost-server-id` — stamped on every create/start.
+- Instance metadata `onehost-idle-disabled` — stamped `1` only when `start --persist`
+  is used (absent otherwise). The idle agent reads it and skips self-teardown for
+  that run; it's per-instance, so the next plain `start` runs idle teardown again.
+  Nothing else consumes it.
 - The `onehost-game-vm` SA (`roles/pubsub.publisher` on `onehost-jobs`) — created
   by Terraform when the control plane is enabled, and attached to the VM by the
   provider when `GCP_GAME_VM_SA` is set. This is what lets the box signal at all.

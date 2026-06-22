@@ -80,9 +80,14 @@ export function parseFlags(args: string[]): Flags {
  *  preserves whatever the snapshot remembers. */
 export function parseStartOpts(args: string[]): StartOptions {
   const opts: StartOptions = {};
-  for (let i = 0; i < args.length; i += 2) {
+  for (let i = 0; i < args.length; i++) {
     const key = args[i];
-    const value = args[i + 1];
+    // Boolean flag — no value, so don't consume the next token.
+    if (key === '--persist') {
+      opts.persist = true;
+      continue;
+    }
+    const value = args[++i];
     if (value === undefined) break;
     if (key === '--machine') opts.machineType = value;
     else if (key === '--disk-type') opts.diskType = value;

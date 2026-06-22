@@ -155,6 +155,21 @@ describe('parseStartOpts', () => {
   it('rejects an unknown flag', () => {
     expect(() => parseStartOpts(['--vcpus', '4'])).toThrow(/unknown flag/);
   });
+
+  it('parses --persist as a value-less boolean', () => {
+    expect(parseStartOpts(['--persist'])).toEqual({ persist: true });
+  });
+
+  it('combines --persist with value flags without consuming the next token', () => {
+    expect(parseStartOpts(['--persist', '--machine', 'c2-standard-4'])).toEqual({
+      persist: true,
+      machineType: 'c2-standard-4',
+    });
+    expect(parseStartOpts(['--machine', 'c2-standard-4', '--persist'])).toEqual({
+      persist: true,
+      machineType: 'c2-standard-4',
+    });
+  });
 });
 
 describe('parseSweepOpts', () => {
