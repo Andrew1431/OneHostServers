@@ -107,11 +107,40 @@ variable "discord_channel_webhook_url" {
   description = "Channel webhook the worker posts to for jobs with no interaction (idle self-teardown, future reconcile sweep / nag). Empty = those jobs run silently."
 }
 
+variable "dns_provider" {
+  type        = string
+  default     = "duckdns"
+  description = "Which DNS adapter the worker uses for the stable-address feature: \"duckdns\" or \"cloudflare\". See epic #13 / MACHINE_AGENT.md."
+  validation {
+    condition     = contains(["duckdns", "cloudflare"], var.dns_provider)
+    error_message = "dns_provider must be \"duckdns\" or \"cloudflare\"."
+  }
+}
+
 variable "duckdns_token" {
   type        = string
   default     = ""
   sensitive   = true
-  description = "DuckDNS account token for the stable-address (DNS) feature. Empty = DNS off (opt-in); when set, it's stored in Secret Manager and injected into the worker as DUCKDNS_TOKEN. See epic #13 / MACHINE_AGENT.md."
+  description = "DuckDNS account token (dns_provider=duckdns). Empty = DNS off (opt-in); when set, it's stored in Secret Manager and injected into the worker as DUCKDNS_TOKEN. See epic #13 / MACHINE_AGENT.md."
+}
+
+variable "cloudflare_api_token" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = "Cloudflare API token with Zone:DNS:Edit on the zone (dns_provider=cloudflare). Empty = DNS off (opt-in); when set, it's stored in Secret Manager and injected into the worker as CLOUDFLARE_API_TOKEN."
+}
+
+variable "cloudflare_zone" {
+  type        = string
+  default     = ""
+  description = "Cloudflare zone / domain you own, e.g. mydomain.com (dns_provider=cloudflare). Per-server subdomains from `create --dns` live under it. Injected as CLOUDFLARE_ZONE."
+}
+
+variable "cloudflare_zone_id" {
+  type        = string
+  default     = ""
+  description = "Optional Cloudflare zone id — set it to skip the zone name -> id lookup. Injected as CLOUDFLARE_ZONE_ID when non-empty."
 }
 
 variable "interactions_image" {

@@ -142,11 +142,16 @@ autostop_uptime_hours = 0   # also auto-stop at this many hours (0 = warn only)
 #   Scheduler (e.g. northamerica-northeast2 / Toronto); it just publishes to the
 #   global topic, so it need not match your compute region.
 
-# Optional: stable address (DuckDNS). Blank = off (servers keep their bare
-# ephemeral IP). When set, it's stored in Secret Manager and the worker upserts an
-# A record on start / clears it on stop. Get a token at https://www.duckdns.org;
-# per-server hostnames are chosen at `create --dns <host>` (or `cli dns <id>`).
-duckdns_token = ""
+# Optional: stable address (DNS). Blank token = off (servers keep their bare
+# ephemeral IP). When set, the token is stored in Secret Manager and the worker
+# upserts an A record on start / clears it on stop. Per-server hostnames are
+# chosen at `create --dns <subdomain>` (or `cli dns <id>`). Pick ONE provider —
+# see "Stable address (DNS)" below for how to get each token.
+dns_provider = "duckdns"   # "duckdns" | "cloudflare"
+duckdns_token = ""         # dns_provider = "duckdns"
+# cloudflare_api_token = ""            # dns_provider = "cloudflare"
+# cloudflare_zone      = "yourdomain.com"
+# cloudflare_zone_id   = ""            # optional; skips the zone name -> id lookup
 
 interactions_image = "northamerica-northeast2-docker.pkg.dev/PROJECT/onehost/interactions:latest"
 worker_image       = "northamerica-northeast2-docker.pkg.dev/PROJECT/onehost/worker:latest"
@@ -216,6 +221,67 @@ After that it's all Discord, in your locked channel:
 
 `<id>` is the server id from `/list` (or `pnpm cli list`). Provisioning
 (create/destroy) stays CLI-only by design.
+
+---
+
+## Stable address (DNS)
+
+**Optional.** By default a server gets a fresh ephemeral IP every `start`, so
+players need the new IP each time. Turn this on and OneHost keeps a hostname
+pointed at the current IP: it upserts an A record on `create`/`start` and clears
+it on `stop`. Records use a 60s TTL so a restart's new IP propagates fast.
+
+It's off unless a token is set, and it's driven by a single seam
+(`@onehost/dns`) with two backends selected by `DNS_PROVIDER`. Pick one:
+
+### Option A — Cloudflare (you own a domain)
+
+Best if you already have a domain on Cloudflare. You set the zone once and each
+server is a subdomain under it: `create --dns play` → `play.yourdomain.com`.
+
+1. **Get a scoped API token.** Cloudflare dashboard → **My Profile → API Tokens
+   → Create Token → Create Custom Token**. Give it:
+   - **Permissions:** `Zone` · `DNS` · `Edit`
+   - **Zone Resources:** `Include` · `Specific zone` · *yourdomain.com*
+
+   Create it and copy the token (shown once).
+2. **Point config at it.** For CLI use, the repo-root `.env` (which you've
+   already started):
+
+   ```bash
+   DNS_PROVIDER=cloudflare
+   CLOUDFLARE_API_TOKEN=your-token
+   CLOUDFLARE_ZONE=yourdomain.com
+   # CLOUDFLARE_ZONE_ID=…        # optional; skips one API lookup per run
+   ```
+
+   That's everything the CLI needs — nothing else. For the **deployed Discord
+   bot**, put the same values in `infra/terraform.tfvars` (`dns_provider`,
+   `cloudflare_api_token`, `cloudflare_zone`) and `terraform apply`; the token
+   goes to Secret Manager and is injected into the worker.
+
+Because game traffic (UDP / arbitrary TCP) can't go through Cloudflare's HTTP
+proxy, OneHost writes records **DNS-only** (grey cloud, not proxied) — don't flip
+them to proxied in the dashboard.
+
+### Option B — DuckDNS (no domain needed)
+
+Free single-hostname DDNS. Register a subdomain at
+<https://www.duckdns.org>, then set `DNS_PROVIDER=duckdns` (the default) and
+`DUCKDNS_TOKEN=…` in `.env` (or `duckdns_token` in tfvars). A server's `--dns`
+value is your DuckDNS subdomain label.
+
+### Using it (either provider)
+
+```bash
+pnpm cli create mc --port tcp:25565 --dns mc   # name it at create time
+pnpm cli dns mc mc                              # or attach/retarget on an existing server
+pnpm cli dns mc --clear                         # remove the record
+pnpm cli status mc                              # shows the hostname next to the IP
+```
+
+DNS is best-effort: if a record update fails, the server still starts and the
+command still succeeds — you just fall back to the raw IP for that run.
 
 ---
 

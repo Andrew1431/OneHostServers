@@ -82,11 +82,17 @@ export interface ServerView {
   address: string;
   machine: string;
   disk: string;
-  /** Full DuckDNS domain (`host.duckdns.org`), or "—" when DNS is off. */
+  /** Full stable domain (`host.<suffix>`), or "—" when DNS is off. */
   dns: string;
 }
 
-export function viewServer(s: ServerSummary): ServerView {
+/**
+ * `dnsSuffix` is the domain the stored label lives under (`duckdns.org` or a
+ * Cloudflare zone), from the caller's env via `@onehost/dns` `dnsDomainSuffix()`.
+ * Kept a parameter so `core` stays I/O-free. When omitted (or undecidable),
+ * falls back to showing the bare label.
+ */
+export function viewServer(s: ServerSummary, dnsSuffix?: string): ServerView {
   return {
     id: s.id,
     state: s.state,
@@ -95,7 +101,7 @@ export function viewServer(s: ServerSummary): ServerView {
     address: s.address ?? (s.state === 'RUNNING' ? '(no address)' : '—'),
     machine: describeMachine(s.machineType),
     disk: s.diskType ?? '—',
-    dns: s.dnsHost ? `${s.dnsHost}.duckdns.org` : '—',
+    dns: s.dnsHost ? (dnsSuffix ? `${s.dnsHost}.${dnsSuffix}` : s.dnsHost) : '—',
   };
 }
 

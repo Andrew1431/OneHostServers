@@ -48,12 +48,13 @@ export interface PortRule {
  * adapter.
  */
 export interface DnsSpec {
-  /** Adapter selector. v1 ships only DuckDNS. */
-  provider: 'duckdns';
+  /** Adapter selector (deployment-level via `DNS_PROVIDER`; recorded for reference). */
+  provider: 'duckdns' | 'cloudflare';
   /**
    * The subdomain *label* the record lives at — `myserver` for
-   * `myserver.duckdns.org`, not the full domain. Must be label-safe (lowercase
-   * alphanumeric + hyphens) so it survives as a GCP label across stop/start.
+   * `myserver.duckdns.org` or `myserver.<your-zone>` (Cloudflare), not the full
+   * domain. Must be label-safe (lowercase alphanumeric + hyphens) so it survives
+   * as a GCP label across stop/start.
    */
   hostname: string;
 }

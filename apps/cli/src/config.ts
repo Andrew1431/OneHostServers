@@ -50,7 +50,15 @@ function parseEnv(text: string): Record<string, string> {
     const eq = line.indexOf('=');
     if (eq === -1) continue;
     const key = line.slice(0, eq).trim();
-    const value = line.slice(eq + 1).trim().replace(/^["']|["']$/g, '');
+    let value = line.slice(eq + 1).trim();
+    // Strip an inline comment (` #…`) on unquoted values so a pasted
+    // `KEY=val   # note` doesn't fold the note into the value. A quoted value
+    // keeps everything between the quotes verbatim.
+    if (!/^["']/.test(value)) {
+      const hash = value.search(/\s#/);
+      if (hash !== -1) value = value.slice(0, hash).trim();
+    }
+    value = value.replace(/^["']|["']$/g, '');
     if (key) out[key] = value;
   }
   return out;

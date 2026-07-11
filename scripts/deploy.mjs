@@ -22,7 +22,15 @@ const { project, region } = loadConfig();
 console.log(`project ${project} · region ${region} · services: ${services.join(', ')}\n`);
 
 if (!skipBuild) {
-  gcloud(['builds', 'submit', '--config', 'cloudbuild.yaml', `--substitutions=_REGION=${region}`, '.']);
+  // Pin the build to the .env project — otherwise it silently uses whatever
+  // `gcloud config` points at (which drifts when you juggle projects).
+  gcloud([
+    'builds', 'submit',
+    '--project', project,
+    '--config', 'cloudbuild.yaml',
+    `--substitutions=_REGION=${region}`,
+    '.',
+  ]);
 }
 
 for (const svc of services) {

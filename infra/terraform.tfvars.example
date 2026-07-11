@@ -42,9 +42,17 @@ autostop_uptime_hours = 0 # also auto-stop at this many hours (0 = warn only)
 #                                       # (e.g. northamerica-northeast2 → use northeast1)
 
 # --- Stable address / DNS (optional) ---
-# DuckDNS token. Blank = off. When set, stored in Secret Manager and injected
-# into the worker; per-server hostnames via `create --dns`.
+# Pick ONE provider. Blank token = off. When set, the token is stored in Secret
+# Manager and injected into the worker; per-server hostnames via `create --dns`.
+dns_provider = "duckdns" # "duckdns" | "cloudflare"
+
+# DuckDNS (dns_provider = "duckdns")
 duckdns_token = ""
+
+# Cloudflare (dns_provider = "cloudflare") — a token with Zone:DNS:Edit + your zone.
+# cloudflare_api_token = ""
+# cloudflare_zone      = "yourdomain.com"   # `create --dns play` -> play.yourdomain.com
+# cloudflare_zone_id   = ""                 # optional: skip the zone name -> id lookup
 
 # --- Container images (required when control plane or bot is enabled) ---
 # Replace PROJECT with project_id; push them first (pnpm build:images, see SETUP.md).

@@ -1,6 +1,7 @@
 import type { ServerId, ServerState, ServerSummary } from '@onehost/core';
 import type { ServerProvider, ReconcileReport } from '@onehost/provider-api';
 import type { DnsProvider } from '@onehost/dns';
+import { dnsDomainSuffix } from '@onehost/dns';
 import { STATE_ICON, describeMachine, viewServer } from '@onehost/core';
 import type { Job } from '@onehost/jobs';
 
@@ -179,7 +180,7 @@ async function startedEmbed(deps: WorkerDeps, id: ServerId): Promise<Embed> {
       color: STATE_COLOR.RUNNING,
     };
   }
-  const v = viewServer(summary);
+  const v = viewServer(summary, dnsDomainSuffix());
   return {
     title: `${v.icon} ${id} is up`,
     color: STATE_COLOR[summary.state],
@@ -208,7 +209,7 @@ function listEmbed(servers: ServerSummary[]): Embed {
     title: 'Servers',
     color: STATE_COLOR.RUNNING,
     fields: servers.map((s) => {
-      const v = viewServer(s);
+      const v = viewServer(s, dnsDomainSuffix());
       const details = [`${describeMachine(s.machineType)} · ${v.disk}`];
       if (s.zone) details.push(`zone ${s.zone}`);
       details.push(v.address);

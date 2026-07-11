@@ -1,7 +1,7 @@
 import * as p from '@clack/prompts';
 import type { ServerSpec } from '@onehost/core';
 import type { ServerProvider, StartOptions } from '@onehost/provider-api';
-import { dnsProviderFromEnv } from '@onehost/dns';
+import { dnsProviderFromEnv, dnsFqdn, dnsProviderName } from '@onehost/dns';
 import {
   GcpCatalog,
   type GcpConfig,
@@ -249,13 +249,14 @@ export function validateDnsInput(raw: string): string | undefined {
 async function publishDns(host: string, ip: string): Promise<void> {
   const dns = await dnsProviderFromEnv();
   if (!dns) {
-    p.log.warn(`DNS: ${host}.duckdns.org — set DUCKDNS_TOKEN to publish the record`);
+    const tokenVar = dnsProviderName() === 'cloudflare' ? 'CLOUDFLARE_API_TOKEN' : 'DUCKDNS_TOKEN';
+    p.log.warn(`DNS: ${dnsFqdn(host)} — set ${tokenVar} to publish the record`);
     return;
   }
   try {
     await dns.upsertAddress(host, ip);
   } catch (err) {
-    p.log.warn(`DNS: updating ${host}.duckdns.org failed: ${err instanceof Error ? err.message : err}`);
+    p.log.warn(`DNS: updating ${dnsFqdn(host)} failed: ${err instanceof Error ? err.message : err}`);
   }
 }
 
@@ -311,11 +312,12 @@ export async function createInteractively(
   const ports = parsePortsInput(portsAnswer);
 
   // --- stable address (opt-in) ----------------------------------------------
-  // A DuckDNS subdomain that follows the server's IP across stop/start. Blank to
-  // keep the bare ephemeral IP (which changes every start).
+  // A subdomain that follows the server's IP across stop/start. Blank to keep the
+  // bare ephemeral IP (which changes every start). Suffix comes from the
+  // configured DNS provider (duckdns.org, or your Cloudflare zone).
   const dnsAnswer = await p.text({
-    message: 'Stable address (DuckDNS subdomain, optional)',
-    placeholder: 'e.g. my-mc  →  my-mc.duckdns.org   (blank = none)',
+    message: 'Stable address (subdomain, optional)',
+    placeholder: `e.g. my-mc  →  ${dnsFqdn('my-mc')}   (blank = none)`,
     defaultValue: '',
     validate: validateDnsInput,
   });
@@ -331,7 +333,7 @@ export async function createInteractively(
       `machine   ${machineType}  (${vcpus} vCPU / ${(memoryMb / 1024).toFixed(0)} GB)`,
       `disk      ${diskGb} GB ${diskType}`,
       `ports     ${ports.length ? ports.map((pr) => `${pr.protocol}:${pr.port}`).join(', ') : '(none — SSH only)'}`,
-      `dns       ${dnsHost ? `${dnsHost}.duckdns.org` : '(none — bare IP)'}`,
+      `dns       ${dnsHost ? dnsFqdn(dnsHost) : '(none — bare IP)'}`,
       `compute   ${fmtHr(est.computeHr)}`,
       `disk      ${fmtHr(est.diskHr)}`,
       `total     ${fmtHr(est.totalHr)}  (${monthly} if left running)`,
@@ -351,7 +353,7 @@ export async function createInteractively(
     region,
     machine: { vcpus, memoryMb, diskGb, diskType, type: machineType },
     ports,
-    ...(dnsHost ? { dns: { provider: 'duckdns' as const, hostname: dnsHost } } : {}),
+    ...(dnsHost ? { dns: { provider: dnsProviderName(), hostname: dnsHost } } : {}),
   };
 
   const create = p.spinner();
@@ -361,7 +363,7 @@ export async function createInteractively(
     create.stop(`Created '${id}'`);
     // create boots to RUNNING, so publish the first A record now (best-effort).
     if (running.dnsHost) await publishDns(running.dnsHost, running.address);
-    const where = running.dnsHost ? `${running.dnsHost}.duckdns.org (${running.address})` : running.address;
+    const where = running.dnsHost ? `${dnsFqdn(running.dnsHost)} (${running.address})` : running.address;
     p.outro(`Reachable at ${where} — SSH in, install your game, then \`stop\` to snapshot it.`);
   } catch (err) {
     create.stop('Provisioning failed', 1);

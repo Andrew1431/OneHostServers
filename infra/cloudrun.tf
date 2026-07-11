@@ -31,9 +31,14 @@ locals {
   # Scheduler isn't available in every region; fall back to var.region but let it
   # be overridden when the region isn't a Scheduler location (e.g. northeast2).
   sweep_location = var.sweep_location != "" ? var.sweep_location : var.region
-  # Stable-address (DuckDNS) is opt-in: only stand up the secret + worker env when
-  # a token is supplied. The worker treats an unset DUCKDNS_TOKEN as "DNS off".
-  dns_enabled = local.control_plane && var.duckdns_token != ""
+  # Stable-address (DNS) is opt-in: only stand up the secret + worker env when the
+  # selected provider's token is supplied. The worker treats an unset token as
+  # "DNS off". One provider is active at a time (var.dns_provider).
+  dns_is_cloudflare      = var.dns_provider == "cloudflare"
+  dns_token_value        = local.dns_is_cloudflare ? var.cloudflare_api_token : var.duckdns_token
+  dns_enabled            = local.control_plane && local.dns_token_value != ""
+  dns_duckdns_enabled    = local.dns_enabled && !local.dns_is_cloudflare
+  dns_cloudflare_enabled = local.dns_enabled && local.dns_is_cloudflare
 }
 
 resource "google_project_service" "run" {
@@ -56,10 +61,11 @@ resource "google_pubsub_topic" "jobs" {
   depends_on = [google_project_service.pubsub]
 }
 
-# --- DuckDNS token (Secret Manager) -----------------------------------------
+# --- DNS token (Secret Manager) ---------------------------------------------
 # Opt-in stable-address feature: the worker upserts an A record on start and
-# clears it on stop (epic #13). The token is the one deployment-wide secret the
-# feature needs; it stays off the game VMs entirely (off-box DNS).
+# clears it on stop (epic #13). The provider's token is the one deployment-wide
+# secret the feature needs; it stays off the game VMs entirely (off-box DNS).
+# One secret exists at a time, per the selected var.dns_provider.
 
 resource "google_project_service" "secretmanager" {
   count              = local.dns_enabled ? 1 : 0
@@ -68,7 +74,7 @@ resource "google_project_service" "secretmanager" {
 }
 
 resource "google_secret_manager_secret" "duckdns_token" {
-  count     = local.dns_enabled ? 1 : 0
+  count     = local.dns_duckdns_enabled ? 1 : 0
   secret_id = "onehost-duckdns-token"
   replication {
     auto {}
@@ -77,15 +83,37 @@ resource "google_secret_manager_secret" "duckdns_token" {
 }
 
 resource "google_secret_manager_secret_version" "duckdns_token" {
-  count       = local.dns_enabled ? 1 : 0
+  count       = local.dns_duckdns_enabled ? 1 : 0
   secret      = google_secret_manager_secret.duckdns_token[0].id
   secret_data = var.duckdns_token
 }
 
 # Only the worker reads it (interactions never touches DNS).
 resource "google_secret_manager_secret_iam_member" "worker_duckdns" {
-  count     = local.dns_enabled ? 1 : 0
+  count     = local.dns_duckdns_enabled ? 1 : 0
   secret_id = google_secret_manager_secret.duckdns_token[0].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.worker[0].email}"
+}
+
+resource "google_secret_manager_secret" "cloudflare_token" {
+  count     = local.dns_cloudflare_enabled ? 1 : 0
+  secret_id = "onehost-cloudflare-api-token"
+  replication {
+    auto {}
+  }
+  depends_on = [google_project_service.secretmanager]
+}
+
+resource "google_secret_manager_secret_version" "cloudflare_token" {
+  count       = local.dns_cloudflare_enabled ? 1 : 0
+  secret      = google_secret_manager_secret.cloudflare_token[0].id
+  secret_data = var.cloudflare_api_token
+}
+
+resource "google_secret_manager_secret_iam_member" "worker_cloudflare" {
+  count     = local.dns_cloudflare_enabled ? 1 : 0
+  secret_id = google_secret_manager_secret.cloudflare_token[0].secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.worker[0].email}"
 }
@@ -171,8 +199,12 @@ resource "google_cloud_run_v2_service" "worker" {
   name     = "onehost-worker"
   location = var.region
   ingress  = "INGRESS_TRAFFIC_ALL" # push arrives over the internet; IAM gates it
-  # The secret IAM must exist before the service mounts DUCKDNS_TOKEN (no-op when DNS off).
-  depends_on = [google_project_service.run, google_secret_manager_secret_iam_member.worker_duckdns]
+  # The secret IAM must exist before the service mounts the DNS token (no-op when DNS off).
+  depends_on = [
+    google_project_service.run,
+    google_secret_manager_secret_iam_member.worker_duckdns,
+    google_secret_manager_secret_iam_member.worker_cloudflare,
+  ]
 
   template {
     service_account = google_service_account.worker[0].email
@@ -217,15 +249,51 @@ resource "google_cloud_run_v2_service" "worker" {
         name  = "ONEHOST_AUTOSTOP_UPTIME_HOURS"
         value = tostring(var.autostop_uptime_hours)
       }
-      # DuckDNS token from Secret Manager — only when the DNS feature is enabled.
+      # DNS provider selector + credentials — only when the feature is enabled.
       # Absent => the worker's dnsProviderFromEnv() returns undefined (DNS off).
       dynamic "env" {
         for_each = local.dns_enabled ? [1] : []
+        content {
+          name  = "DNS_PROVIDER"
+          value = var.dns_provider
+        }
+      }
+      # DuckDNS token from Secret Manager (dns_provider=duckdns).
+      dynamic "env" {
+        for_each = local.dns_duckdns_enabled ? [1] : []
         content {
           name = "DUCKDNS_TOKEN"
           value_source {
             secret_key_ref {
               secret  = google_secret_manager_secret.duckdns_token[0].secret_id
+              version = "latest"
+            }
+          }
+        }
+      }
+      # Cloudflare zone + optional zone id (plain), and the API token from Secret
+      # Manager (dns_provider=cloudflare).
+      dynamic "env" {
+        for_each = local.dns_cloudflare_enabled ? [1] : []
+        content {
+          name  = "CLOUDFLARE_ZONE"
+          value = var.cloudflare_zone
+        }
+      }
+      dynamic "env" {
+        for_each = local.dns_cloudflare_enabled && var.cloudflare_zone_id != "" ? [1] : []
+        content {
+          name  = "CLOUDFLARE_ZONE_ID"
+          value = var.cloudflare_zone_id
+        }
+      }
+      dynamic "env" {
+        for_each = local.dns_cloudflare_enabled ? [1] : []
+        content {
+          name = "CLOUDFLARE_API_TOKEN"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.cloudflare_token[0].secret_id
               version = "latest"
             }
           }

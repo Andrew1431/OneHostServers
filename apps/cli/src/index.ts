@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import type { ServerSummary } from '@onehost/core';
 import { viewServer } from '@onehost/core';
 import { GcpServerProvider } from '@onehost/gcp';
-import { dnsProviderFromEnv } from '@onehost/dns';
+import { dnsProviderFromEnv, dnsFqdn, dnsDomainSuffix, dnsProviderName } from '@onehost/dns';
 import { loadGcpConfig, writeConfig, envFilePath } from './config.ts';
 import { createInteractively, startInteractively } from './interactive.ts';
 import { runInit } from './init.ts';
@@ -108,7 +108,7 @@ async function main(): Promise<void> {
       // shows the stable name alongside the IP when DNS is enabled.
       const dnsHost = (await provider.list()).find((s) => s.id === id)?.dnsHost;
       const addr = status.address ? ` @ ${status.address}` : '';
-      const dns = dnsHost ? ` (${dnsHost}.duckdns.org)` : '';
+      const dns = dnsHost ? ` (${dnsFqdn(dnsHost)})` : '';
       console.log(`${id}: ${status.state}${addr}${dns}`);
       break;
     }
@@ -163,7 +163,7 @@ async function main(): Promise<void> {
         await provider.setDnsHost(id, hostname);
         const summary = (await provider.list()).find((s) => s.id === id);
         if (summary?.address) await announceDns(hostname, summary.address);
-        else console.log(`✅ '${id}' now resolves at ${hostname}.duckdns.org`);
+        else console.log(`✅ '${id}' now resolves at ${dnsFqdn(hostname)}`);
       }
       console.log('   Running servers apply this live; a stopped one picks it up on next start.');
       break;
@@ -205,13 +205,14 @@ function runConfig(args: string[]): void {
  * Write the A record for a freshly-booted server and print the stable name. The
  * CLI has env creds, so it does the upsert directly (the worker owns later
  * start/stop). Best-effort: a DNS hiccup doesn't fail the command. If DNS is
- * unconfigured (no DUCKDNS_TOKEN), we still print the name and a hint.
+ * unconfigured (no token), we still print the name and a hint.
  */
 async function announceDns(host: string, ip: string): Promise<void> {
   const dns = await dnsProviderFromEnv();
-  const domain = `${host}.duckdns.org`;
+  const domain = dnsFqdn(host);
   if (!dns) {
-    console.log(`   DNS: ${domain} (set DUCKDNS_TOKEN to publish the record)`);
+    const tokenVar = dnsProviderName() === 'cloudflare' ? 'CLOUDFLARE_API_TOKEN' : 'DUCKDNS_TOKEN';
+    console.log(`   DNS: ${domain} (set ${tokenVar} to publish the record)`);
     return;
   }
   try {
@@ -229,7 +230,7 @@ async function removeDns(host: string): Promise<void> {
   try {
     await dns.removeAddress(host);
   } catch (err) {
-    console.log(`   DNS: clearing ${host}.duckdns.org failed: ${err instanceof Error ? err.message : err}`);
+    console.log(`   DNS: clearing ${dnsFqdn(host)} failed: ${err instanceof Error ? err.message : err}`);
   }
 }
 
@@ -238,8 +239,9 @@ function printServers(servers: ServerSummary[]): void {
     console.log('No servers. `create <id>` to make one.');
     return;
   }
+  const suffix = dnsDomainSuffix();
   const rows = servers.map((s) => {
-    const v = viewServer(s);
+    const v = viewServer(s, suffix);
     return {
       ID: v.id,
       STATE: v.state,
@@ -268,7 +270,7 @@ function usage(): void {
       '  create [<id>]                                                # interactive picker (TTY)',
       '  create <id> [--vcpus 2] [--memory 4096] [--disk 20]         # non-interactive',
       '              [--disk-type pd-balanced] [--machine n2-standard-4] [--port tcp:25565]',
-      '              [--dns <duckdns-host>]                           # opt-in stable address',
+      '              [--dns <subdomain>]                              # opt-in stable address (DuckDNS/Cloudflare)',
       '              [-i|--interactive]                               # force the picker',
       '  start <id>  [--disk-type pd-ssd] [--machine c2-standard-4]   # override to upgrade',
       '              [--disk 40]                                      # grow boot disk (GB, >= snapshot)',
@@ -277,7 +279,7 @@ function usage(): void {
       '  stop <id>',
       '  status <id>',
       '  ports <id> [--port udp:15636-15637] [--port tcp:80,443]      # set open ports (CLI-only); ranges N-M and lists N,M ok; no --port clears them',
-      '  dns <id> <duckdns-host> | --clear                            # set/remove the stable address on an existing server',
+      '  dns <id> <subdomain> | --clear                               # set/remove the stable address on an existing server',
       '  ssh <id> [-- <remote command>]                               # gcloud compute ssh into it',
       '  list                                                         # all servers, all zones',
       '  sweep [--max-uptime <h>] [--autostop <h>]                    # flag/auto-stop long-running servers',
