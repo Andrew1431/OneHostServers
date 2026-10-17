@@ -72,7 +72,13 @@ async function main(): Promise<void> {
     }
     case 'stop': {
       if (!id) return fail('stop needs a server id');
+      // Read the remembered host *before* stop deletes the instance, so we can
+      // clear the record afterward — a stale A record could point players at
+      // whoever GCP reassigns the freed IP to (epic #13). The label persists, so
+      // the next start re-publishes. Mirrors the worker's stop path.
+      const dnsHost = (await provider.list()).find((s) => s.id === id)?.dnsHost;
       await provider.stop(id);
+      if (dnsHost) await removeDns(dnsHost);
       console.log(`✅ stopped '${id}' — snapshot saved, instance + disk deleted`);
       break;
     }
@@ -284,7 +290,7 @@ function usage(): void {
       '  list                                                         # all servers, all zones',
       '  sweep [--max-uptime <h>] [--autostop <h>]                    # flag/auto-stop long-running servers',
       '  destroy <id>',
-      '  config --project <id> [--zone <zone>] [--keep-snapshots 3]   # save to .env once',
+      '  config --project <id> [--zone <zone>] [--keep-snapshots 1]   # save to .env once',
       '',
       '  --machine overrides --vcpus/--memory (pick a faster-core family than e2)',
       '  disk types: pd-standard (HDD) | pd-balanced (SSD) | pd-ssd (fast SSD)',
