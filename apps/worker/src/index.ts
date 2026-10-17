@@ -31,10 +31,13 @@ const DISCORD_API = 'https://discord.com/api/v10';
 /** Optional shared secret on the push URL (?token=). Empty = rely on Cloud Run IAM. */
 const PUSH_TOKEN = process.env.PUBSUB_PUSH_TOKEN ?? '';
 /**
- * Channel webhook for jobs with no interaction to edit (idle self-teardown, and
- * the reconcile sweep / long-running nag). Empty = those jobs run silently.
+ * Channel webhook(s) for jobs with no interaction to edit (idle self-teardown, and
+ * the reconcile sweep / long-running nag). Comma-separated to notify several
+ * channels/guilds. Empty = those jobs run silently.
  */
-const CHANNEL_WEBHOOK_URL = process.env.DISCORD_CHANNEL_WEBHOOK_URL ?? '';
+const CHANNEL_WEBHOOK_URLS = (process.env.DISCORD_CHANNEL_WEBHOOK_URL ?? '')
+  .split(/[\s,]+/)
+  .filter(Boolean);
 
 /**
  * Edit the original interaction reply (the "⏳ working" message). No bot token
@@ -57,23 +60,31 @@ async function editOriginal(interactionToken: string, message: DiscordMessage): 
 }
 
 /**
- * Post to the channel webhook for jobs with no interaction to edit. A no-op (with
- * a log line) when unconfigured, so an idle teardown still completes silently
- * rather than failing.
+ * Post to every channel webhook for jobs with no interaction to edit. A no-op
+ * (with a log line) when unconfigured, so an idle teardown still completes
+ * silently rather than failing. One bad webhook doesn't block the others.
  */
 async function postWebhook(message: DiscordMessage): Promise<void> {
-  if (!CHANNEL_WEBHOOK_URL) {
+  if (CHANNEL_WEBHOOK_URLS.length === 0) {
     console.log('DISCORD_CHANNEL_WEBHOOK_URL unset — tokenless job ran without notifying');
     return;
   }
-  const res = await fetch(CHANNEL_WEBHOOK_URL, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(message),
-  });
-  if (!res.ok) {
-    console.error(`discord webhook post failed: ${res.status} ${await res.text()}`);
-  }
+  await Promise.all(
+    CHANNEL_WEBHOOK_URLS.map(async (url) => {
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(message),
+        });
+        if (!res.ok) {
+          console.error(`discord webhook post failed: ${res.status} ${await res.text()}`);
+        }
+      } catch (err) {
+        console.error('discord webhook post failed:', err);
+      }
+    }),
+  );
 }
 
 // --- HTTP transport (Pub/Sub push) -----------------------------------------

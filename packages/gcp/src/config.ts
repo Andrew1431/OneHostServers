@@ -51,8 +51,13 @@ export const DNS_HOST_LABEL = 'onehost-dns-host';
  */
 export const NAGGED_LABEL = 'onehost-nagged-at';
 
-/** Keep the latest N snapshots per server after each stop; prune older ones. */
-export const DEFAULT_SNAPSHOT_KEEP = 3;
+/**
+ * Keep the latest N snapshots per server after each stop; prune older ones.
+ * One is enough: the snapshot is the restore point, while save *history* lives on
+ * the disk as on-box interval backups (MACHINE_AGENT.md) and rides inside it.
+ * Pruning runs only after the new snapshot is READY, so there's never zero.
+ */
+export const DEFAULT_SNAPSHOT_KEEP = 1;
 
 /** SSD-backed default — far better random IOPS than pd-standard for chunk I/O. */
 export const DEFAULT_DISK_TYPE = 'pd-balanced';

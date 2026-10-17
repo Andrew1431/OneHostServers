@@ -428,14 +428,25 @@ describe('snapshot prune (via stop)', () => {
   }
 
   it('keeps the newest N and deletes the rest (newest-first)', async () => {
-    // keep=3 (default). Seed 5 snapshots; expect the 2 oldest deleted.
-    const { p, fake } = provider({
+    // keep=3. Seed 5 snapshots; expect the 2 oldest deleted.
+    const fake = makeFakeGcp({
       instancesByZone: { 'us-central1-a': [runningInstance()] },
       snapshots: snaps(5),
     });
+    const p = new GcpServerProvider({ ...cfg, snapshotKeep: 3 }, fake.clients);
     await p.stop(ID);
     const deleted = fake.callsTo('snapshots.delete').map((c) => (c.args as { snapshot: string }).snapshot);
     // Newest-first sort → keep snap-4,snap-3,snap-2 ; delete snap-1, snap-0.
+    expect(deleted).toEqual(['snap-1', 'snap-0']);
+  });
+
+  it('keeps only the newest by default', async () => {
+    const { p, fake } = provider({
+      instancesByZone: { 'us-central1-a': [runningInstance()] },
+      snapshots: snaps(3),
+    });
+    await p.stop(ID);
+    const deleted = fake.callsTo('snapshots.delete').map((c) => (c.args as { snapshot: string }).snapshot);
     expect(deleted).toEqual(['snap-1', 'snap-0']);
   });
 

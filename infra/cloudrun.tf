@@ -218,10 +218,10 @@ resource "google_cloud_run_v2_service" "worker" {
         name  = "DISCORD_APPLICATION_ID"
         value = var.discord_application_id
       }
-      # Webhook for tokenless jobs (idle self-teardown / future sweep). Empty = silent.
+      # Webhook(s) for tokenless jobs (idle self-teardown / sweep), comma-joined. Empty = silent.
       env {
         name  = "DISCORD_CHANNEL_WEBHOOK_URL"
-        value = var.discord_channel_webhook_url
+        value = join(",", var.discord_channel_webhook_urls)
       }
       env {
         name  = "GCP_PROJECT_ID"
@@ -383,8 +383,12 @@ resource "google_cloud_run_v2_service" "interactions" {
         value = var.discord_application_id
       }
       env {
-        name  = "DISCORD_CHANNEL_ID"
-        value = var.discord_channel_id
+        name  = "DISCORD_ALLOWED_GUILDS"
+        value = join(",", var.discord_allowed_guild_ids)
+      }
+      env {
+        name  = "DISCORD_ALLOWED_CHANNELS"
+        value = join(",", var.discord_allowed_channel_ids)
       }
       env {
         name  = "JOB_TRANSPORT"

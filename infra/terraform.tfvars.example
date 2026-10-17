@@ -27,10 +27,13 @@ enable_bot             = true
 default_zone           = "us-central1-a"
 discord_application_id = "000000000000000000"
 discord_public_key     = "your-app-public-key"
-discord_channel_id     = "000000000000000000" # the one channel commands are allowed in
+# Optional defense-in-depth allowlists. Who may run commands is set in Discord:
+# Server Settings → Integrations → OneHost (per channel + role). [] = no extra guard.
+discord_allowed_guild_ids   = []
+discord_allowed_channel_ids = []
 
-# Optional: channel webhook so tokenless jobs (idle self-teardown, sweep) get announced.
-discord_channel_webhook_url = ""
+# Optional: channel webhooks so tokenless jobs (idle self-teardown, sweep) get announced.
+discord_channel_webhook_urls = []
 
 # --- Reconcile sweep (optional) ---
 # Long-running-server nag + lost-idle-signal backstop. Leave max_uptime_hours = 0

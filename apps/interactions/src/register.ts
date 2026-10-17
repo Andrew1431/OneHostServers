@@ -4,19 +4,23 @@
  *
  *   pnpm register
  *
- * Reads DISCORD_APPLICATION_ID / DISCORD_BOT_TOKEN / DISCORD_GUILD_ID from the
+ * Reads DISCORD_APPLICATION_ID / DISCORD_BOT_TOKEN / DISCORD_GUILD_IDS from the
  * repo-root .env (or the environment) — see loadDotEnv below — so nothing has to
  * be passed on the command line.
  *
- * Guild-scoped commands register instantly (global ones take up to an hour to
- * propagate), so we target a guild. The bot token is needed ONLY here — the
- * runtime interactions endpoint and the worker's follow-ups use the per-request
- * interaction token instead, so no long-lived secret sits in the request path.
+ * DISCORD_GUILD_IDS (comma-separated; DISCORD_GUILD_ID still works) registers to
+ * each listed guild — instant. Leave it empty to register globally: one set of
+ * commands for every guild the app is installed in, but propagation takes up to
+ * an hour. The bot token is needed ONLY here — the runtime endpoint and the
+ * worker's follow-ups use the per-request interaction token instead, so no
+ * long-lived secret sits in the request path.
  *
- * Restricting the command to one channel is done in Discord (Server Settings →
- * Integrations → this app → Channels), reinforced by the DISCORD_CHANNEL_ID
- * guard in the endpoint. We register with no default member permissions so the
- * channel/role config is the single source of who-can-run.
+ * Who-can-run is Discord's own RBAC: commands register guild-only and visible to
+ * everyone by default; narrow them per guild in Server Settings → Integrations →
+ * OneHost (per-channel and per-role overrides). Set DISCORD_COMMANDS_LOCKED=1 to
+ * register them hidden from everyone without the Administrator permission until a
+ * guild grants them there. The endpoint's optional guild/channel allowlists
+ * (authz.ts) back this up.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -25,7 +29,20 @@ loadDotEnv(); // pull DISCORD_* from the repo-root .env so no shell sourcing is 
 
 const APPLICATION_ID = required('DISCORD_APPLICATION_ID');
 const BOT_TOKEN = required('DISCORD_BOT_TOKEN');
-const GUILD_ID = required('DISCORD_GUILD_ID');
+const GUILD_IDS = [
+  ...new Set(
+    `${process.env.DISCORD_GUILD_IDS ?? ''},${process.env.DISCORD_GUILD_ID ?? ''}`
+      .split(/[\s,]+/)
+      .filter(Boolean),
+  ),
+];
+
+/** Discord's InteractionContextType.GUILD / ApplicationIntegrationType.GUILD_INSTALL. */
+const GUILD_ONLY = { contexts: [0], integration_types: [0] } as const;
+/** Bitfield "0" = no one but Administrators until a guild grants it; null = everyone. */
+const DEFAULT_PERMS = {
+  default_member_permissions: process.env.DISCORD_COMMANDS_LOCKED === '1' ? '0' : null,
+};
 
 const CommandOptionType = { STRING: 3 } as const;
 
@@ -58,27 +75,34 @@ const commands = [
       },
     ],
   },
-];
+].map((c) => ({ ...c, ...GUILD_ONLY, ...DEFAULT_PERMS }));
 
-const url = `https://discord.com/api/v10/applications/${APPLICATION_ID}/guilds/${GUILD_ID}/commands`;
-const res = await fetch(url, {
-  method: 'PUT', // PUT = bulk overwrite; the registered set becomes exactly `commands`.
-  headers: {
-    authorization: `Bot ${BOT_TOKEN}`,
-    'content-type': 'application/json',
-  },
-  body: JSON.stringify(commands),
-});
+const base = `https://discord.com/api/v10/applications/${APPLICATION_ID}`;
+const targets = GUILD_IDS.length
+  ? GUILD_IDS.map((g) => ({ label: `guild ${g}`, url: `${base}/guilds/${g}/commands` }))
+  : [{ label: 'global (up to 1h to propagate)', url: `${base}/commands` }];
 
-if (!res.ok) {
-  console.error(`✗ registration failed: ${res.status}`);
-  console.error(await res.text());
-  process.exit(1);
+let failed = false;
+for (const { label, url } of targets) {
+  const res = await fetch(url, {
+    method: 'PUT', // PUT = bulk overwrite; the registered set becomes exactly `commands`.
+    headers: {
+      authorization: `Bot ${BOT_TOKEN}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(commands),
+  });
+  if (!res.ok) {
+    console.error(`✗ registration to ${label} failed: ${res.status}`);
+    console.error(await res.text());
+    failed = true;
+    continue;
+  }
+  const registered = (await res.json()) as Array<{ name: string }>;
+  console.log(`✅ registered ${registered.length} commands to ${label}:`);
+  for (const c of registered) console.log(`   /${c.name}`);
 }
-
-const registered = (await res.json()) as Array<{ name: string }>;
-console.log(`✅ registered ${registered.length} commands to guild ${GUILD_ID}:`);
-for (const c of registered) console.log(`   /${c.name}`);
+if (failed) process.exit(1);
 
 function required(name: string): string {
   const value = process.env[name];

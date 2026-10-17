@@ -129,10 +129,12 @@ game_udp_ports    = ["2456-2458"]                 # e.g. Valheim
 enable_bot             = true  # turns on the Cloud Run + Pub/Sub stack below
 discord_application_id = "…"   # from step 4
 discord_public_key     = "…"   # from step 4
-discord_channel_id     = "…"   # the one channel commands are allowed in
-# Optional: a channel webhook URL so idle self-teardowns + the long-running-server
-# sweep (no slash command behind them) get announced. Blank = they run silently.
-discord_channel_webhook_url = "…"
+# Optional allowlists (defense-in-depth; Discord's Integrations perms are the gate).
+discord_allowed_guild_ids   = ["…"]  # [] = any server the app is installed in
+discord_allowed_channel_ids = []     # [] = any channel the server grants it
+# Optional: channel webhook URLs so idle self-teardowns + the long-running-server
+# sweep (no slash command behind them) get announced. [] = they run silently.
+discord_channel_webhook_urls = ["…"]
 
 # Optional: long-running-server sweep (Cloud Scheduler → worker). 0 = off (no
 # scheduler created). Auto-stop is opt-in and reuses the graceful stop.
@@ -184,7 +186,8 @@ finishes, note the **`interactions_url`** output.
    verify; the endpoint answers the handshake, so it saves immediately.
 2. Register the slash commands. Put the Bot Token + Guild ID from step 4 (and the
    Application ID) in the repo-root `.env` — `DISCORD_APPLICATION_ID`,
-   `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID` — then just:
+   `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_IDS` (comma-separated; leave empty to
+   register globally for every server the app is in, ~1h to propagate) — then just:
 
    ```bash
    pnpm register
@@ -192,9 +195,14 @@ finishes, note the **`interactions_url`** output.
 
    (`register` reads them from `.env`; nothing needs to go on the command line.)
 
-3. Lock the app to one channel: **Server Settings → Integrations → OneHost →
-   Channels** (and use role permissions for *who* can run it). The
-   `DISCORD_CHANNEL_ID` guard in the endpoint backs this up.
+3. Decide who can run it — in Discord, per server: **Server Settings →
+   Integrations → OneHost** → channel and role overrides (e.g. turn All Channels
+   off and allow just `#game-servers`). Commands are visible to everyone by
+   default; set `DISCORD_COMMANDS_LOCKED=1` before `pnpm register` to start them
+   hidden from non-Administrators instead. To add OneHost to another server, invite the app there, add its
+   guild id to `DISCORD_GUILD_IDS` (or register globally), re-run `pnpm register`,
+   and grant it the same way. The `discord_allowed_*` Terraform lists are an
+   optional extra lock on top.
 
 ## 8. Use it
 

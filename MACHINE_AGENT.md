@@ -31,7 +31,8 @@ time** entirely your responsibility. This doc is that contract.
    server id + sizing so `start` can restore it).
 3. **Delete** — the instance and its boot disk are deleted. Idle cost → just the
    snapshot.
-4. **Prune** — old snapshots beyond the keep-count are removed.
+4. **Prune** — older snapshots beyond the keep-count (default **1**) are removed,
+   only after the new one is READY.
 
 Step 1 is the new graceful-shutdown step. Everything good about your snapshot
 depends on your VM doing the right thing during that ACPI window. If your game
@@ -109,6 +110,99 @@ sudo systemctl stop onehost-game.service   # should drain, not kill
 # then the real test:
 gcloud compute instances stop <name> --zone <zone>   # full ACPI path
 ```
+
+## Save history lives on the disk: interval backups
+
+OneHost keeps **one** snapshot per server by default (`--keep-snapshots` /
+`ONEHOST_SNAPSHOT_KEEP` to change). That snapshot is the *restore point*, not the
+*history*. History — "roll back to before the creeper / the bad mod / the
+crash-corrupted save" — is the box's job: the game (or a timer) writes rotating
+backups **onto the same disk**, so every snapshot carries the whole backup set
+with it. Restoring an older save is then a file copy over SSH, not a snapshot
+juggle — and the snapshot stays one cheap incremental chain.
+
+**Contract:** if the game supports it, a server SHOULD keep interval backups on
+its disk, at a cadence and depth the operator chooses. Prefer, in order:
+
+1. **The game's built-in backups**, when it has them — they know how to write a
+   consistent copy while running. Turn them on and set interval/count.
+2. **A systemd timer** that makes a consistent copy (pause saving → flush → copy
+   → resume), when the game has a save-flush command but no backup feature.
+3. **Nothing beyond the snapshot**, when neither exists — say so in the box's
+   README so the operator knows the snapshot is the only restore point.
+
+Operator preferences go in one on-box file the backup job reads, so changing
+cadence is an SSH edit, never a rebuild:
+
+```bash
+# /opt/onehost/backup.env
+BACKUP_INTERVAL=1h      # how often (systemd OnUnitActiveSec syntax)
+BACKUP_KEEP=24          # how many rotations to keep on disk
+BACKUP_DIR=/opt/onehost/backups
+```
+
+Rules that keep it safe:
+
+- **Same disk, bounded.** Backups must rotate (`BACKUP_KEEP`) so they can't fill
+  the disk — a full disk corrupts the live save, which is worse than no backup.
+  Size the boot disk for live save × (`BACKUP_KEEP` + 1) plus headroom.
+- **Consistent copies only.** Never `tar` a save the game is mid-write on; use the
+  game's backup, or flush-and-pause first (below).
+- **Skip when idle.** No players since the last backup → no new backup, so an
+  empty server doesn't rotate good history out.
+- **Not a replacement for the stop path.** The graceful-stop unit above still has
+  to save cleanly on ACPI; backups cover *logical* damage, the stop covers the
+  final state.
+
+Per-game:
+
+| Game | Built-in? | How |
+|------|-----------|-----|
+| Enshrouded (`mornedhels/enshrouded-server`) | Yes (image) | `BACKUP_CRON=0 * * * *`, `BACKUP_MAX_COUNT=24` in the compose env; the server also keeps its own rotating `-1…-N` save files |
+| Palworld | Partial | Server writes periodic world backups under `Pal/Saved/SaveGames/0/<id>/backup/`; tune cadence in `PalWorldSettings.ini` or add a timer |
+| Minecraft (vanilla/Paper) | No | Timer: RCON `save-off` → `save-all flush` → `tar` the `world*` dirs → `save-on` |
+| Valheim | Yes | `-backups N -backupshort S -backuplong L` launch args |
+
+Minecraft-style timer (the generic pattern for "flush command, no backup feature"):
+
+```bash
+#!/usr/bin/env bash
+# /opt/onehost/backup.sh — run by onehost-backup.timer
+set -euo pipefail
+source /opt/onehost/backup.env
+mkdir -p "$BACKUP_DIR"
+rcon() { mcrcon -H 127.0.0.1 -p "$RCON_PASSWORD" "$@"; }
+
+# Skip if nobody played since the last backup (marker touched by the idle probe or
+# here when players > 0).
+[[ "$(rcon list | grep -oE '[0-9]+ of' | cut -d' ' -f1)" -gt 0 || -f /run/onehost-played ]] || exit 0
+
+rcon save-off "save-all flush"
+trap 'rcon save-on' EXIT
+tar czf "$BACKUP_DIR/world-$(date +%Y%m%d-%H%M).tar.gz" -C /opt/onehost/game world world_nether world_the_end
+rm -f /run/onehost-played
+ls -1t "$BACKUP_DIR"/world-*.tar.gz | tail -n +$((BACKUP_KEEP + 1)) | xargs -r rm --
+```
+
+```ini
+# /etc/systemd/system/onehost-backup.service  (Type=oneshot, ExecStart=/opt/onehost/backup.sh)
+# /etc/systemd/system/onehost-backup.timer    (OnUnitActiveSec=${BACKUP_INTERVAL}) → systemctl enable --now onehost-backup.timer
+```
+
+### Why one snapshot is enough (the risk trade)
+
+- **Snapshot object corruption** — very unlikely. Snapshots are redundant,
+  checksummed storage managed by GCP; losing one is a provider-level incident, not
+  a routine failure mode.
+- **Logical damage captured into the snapshot** — the realistic risk: a crash-
+  corrupted world, a griefed base, a bad mod, a game update that mangles saves.
+  The snapshot faithfully preserves the damage. On-disk backups cover exactly
+  this: restore the snapshot, then roll the save back from `BACKUP_DIR`.
+- **Filesystem-level damage** (hard power-cut past the ACPI window on a dirty
+  disk) — the one case where on-disk backups go down with the ship. The
+  graceful-stop unit is the defense; if you want belt-and-braces for a precious
+  world, set `--keep-snapshots 2` (the extra one costs only the delta) or copy
+  saves off-box now and then (`gcloud compute scp`).
 
 ## Optional: the idle agent (only if you want self-teardown)
 
@@ -215,10 +309,13 @@ edges:
       (`init: true` / `tini`, sensible `stop_grace_period`).
 - [ ] `onehost-game.service` installed + enabled; `TimeoutStopSec` < ~90s.
 - [ ] `gcloud compute instances stop` drains cleanly (manual test).
+- [ ] Interval backups on the disk if the game supports them (built-in, or
+      `onehost-backup.timer`), rotated by `/opt/onehost/backup.env`.
 - [ ] *(only for idle self-teardown)* `onehost-idle.timer` + a `count_players`
       probe installed on the box.
 
-Items 1–3 are required for safe snapshots; 4 is only for self-teardown.
+Items 1–3 are required for safe snapshots; 4 is strongly recommended (save
+history); 5 is only for self-teardown.
 
 Provided automatically by the provider/Terraform (nothing to do by hand):
 

@@ -137,8 +137,9 @@ ssh_source_ranges = ${list([o.sshRange])}
 # enable_bot                  = true
 # discord_application_id      = ""
 # discord_public_key          = ""
-# discord_channel_id          = ""
-# discord_channel_webhook_url = ""
+# discord_allowed_guild_ids    = []   # optional allowlist; Discord's Integrations perms are the real gate
+# discord_allowed_channel_ids  = []
+# discord_channel_webhook_urls = []
 # interactions_image          = "${o.region}-docker.pkg.dev/${o.project}/onehost/interactions:latest"
 # worker_image                = "${o.region}-docker.pkg.dev/${o.project}/onehost/worker:latest"
 #

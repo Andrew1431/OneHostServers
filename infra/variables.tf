@@ -94,17 +94,25 @@ variable "discord_public_key" {
   description = "Discord application public key — used to verify interaction signatures."
 }
 
-variable "discord_channel_id" {
-  type        = string
-  default     = ""
-  description = "If set, commands are only accepted from this channel id (defense-in-depth)."
+# Who may run the commands is Discord's own RBAC (Server Settings → Integrations
+# → OneHost, per channel + role). These allowlists are defense-in-depth on top.
+variable "discord_allowed_guild_ids" {
+  type        = list(string)
+  default     = []
+  description = "If non-empty, commands are only accepted from these Discord servers (guild ids). Empty = any guild the app is installed in."
 }
 
-variable "discord_channel_webhook_url" {
-  type        = string
-  default     = ""
+variable "discord_allowed_channel_ids" {
+  type        = list(string)
+  default     = []
+  description = "If non-empty, commands are only accepted from these channel ids (any guild). Empty = rely on Discord's per-channel integration permissions."
+}
+
+variable "discord_channel_webhook_urls" {
+  type        = list(string)
+  default     = []
   sensitive   = true
-  description = "Channel webhook the worker posts to for jobs with no interaction (idle self-teardown, future reconcile sweep / nag). Empty = those jobs run silently."
+  description = "Channel webhooks the worker posts to for jobs with no interaction (idle self-teardown, reconcile sweep / nag) — one per channel to notify. Empty = those jobs run silently."
 }
 
 variable "dns_provider" {

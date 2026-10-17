@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { verifyKey } from 'discord-interactions';
 import { publisherFromEnv, type Job } from '@onehost/jobs';
+import { checkAccess, policyFromEnv } from './authz.ts';
 
 /**
  * Discord HTTP Interactions endpoint. Verifies Ed25519 signatures, answers the
@@ -12,17 +13,16 @@ import { publisherFromEnv, type Job } from '@onehost/jobs';
  * Commands: /list (also serves as status), /start <id>, /stop <id>. Provisioning
  * (create/destroy) is intentionally CLI-only by design.
  *
- * AuthZ (issue #5): delegated to Discord. Register the commands to a single
- * channel and use Discord's channel/role permissions to decide who may run them.
- * As defense-in-depth we also reject any interaction whose channel_id isn't the
- * configured DISCORD_CHANNEL_ID (when set).
+ * AuthZ (issue #5): delegated to Discord. The commands are registered locked
+ * (admin-only) in each guild; admins open them per channel/role in Server
+ * Settings → Integrations → OneHost. Optional guild/channel allowlists
+ * (DISCORD_ALLOWED_GUILDS / DISCORD_ALLOWED_CHANNELS) back that up — see authz.ts.
  *
  * Runtime target: Cloud Run. Local dev: `pnpm --filter @onehost/interactions dev`.
  */
 const PUBLIC_KEY = process.env.DISCORD_PUBLIC_KEY ?? '';
 const PORT = Number(process.env.PORT ?? 8080);
-/** When set, commands are only accepted from this channel. Empty = no guard. */
-const ALLOWED_CHANNEL = process.env.DISCORD_CHANNEL_ID ?? '';
+const POLICY = policyFromEnv();
 
 const publisher = publisherFromEnv();
 
@@ -67,9 +67,8 @@ const server = createServer(async (req, res) => {
 });
 
 async function handleCommand(res: ServerResponse, interaction: any): Promise<void> {
-  if (ALLOWED_CHANNEL && interaction.channel_id !== ALLOWED_CHANNEL) {
-    return reply(res, 'This command can only be used in the OneHost channel.', EPHEMERAL);
-  }
+  const access = checkAccess(interaction, POLICY);
+  if (!access.ok) return reply(res, access.reason, EPHEMERAL);
 
   const name: string = interaction.data?.name;
   const token: string = interaction.token;
