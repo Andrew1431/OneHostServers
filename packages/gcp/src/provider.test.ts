@@ -197,6 +197,19 @@ describe('sizing-label carry-forward', () => {
     expect(labels[SERVER_LABEL]).toBe(instanceName(ID));
   });
 
+  it('stores the snapshot in the region the disk ran in, not a multi-region', async () => {
+    // Placed off the configured zone by capacity fallback — still pin to its region.
+    const { p, fake } = provider({
+      instancesByZone: { 'us-central1-c': [runningInstance()] },
+    });
+    await p.stop(ID);
+    const res = firstArgs<{ snapshotResource: { storageLocations?: string[] } }>(
+      fake,
+      'disks.createSnapshot',
+    ).snapshotResource;
+    expect(res.storageLocations).toEqual(['us-central1']);
+  });
+
   it('omits sizing labels when the instance has none', async () => {
     const { p, fake } = provider({
       instancesByZone: { 'us-central1-a': [runningInstance({ labels: {} })] },

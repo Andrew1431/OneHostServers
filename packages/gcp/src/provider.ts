@@ -115,7 +115,7 @@ export class GcpServerProvider implements ServerProvider {
 
   /** Region derived from the zone, e.g. "northamerica-northeast2-a" -> "...northeast2". */
   private get region(): string {
-    return this.cfg.zone.replace(/-[a-z]$/, '');
+    return regionOfZone(this.cfg.zone);
   }
 
   /**
@@ -338,6 +338,10 @@ export class GcpServerProvider implements ServerProvider {
     }
 
     // 1. Snapshot the boot disk (labelled so we can find it on next start).
+    //    Pin storage to the disk's own region. Left unset, GCP picks the nearest
+    //    multi-region (Toronto → "us"), and every stop's upload and every start's
+    //    restore is billed as cross-location transfer — about half the bill for
+    //    a server that's stopped and started daily. Same-region is free.
     const [snapResp] = await this.disks.createSnapshot({
       project: projectId,
       zone,
@@ -345,6 +349,7 @@ export class GcpServerProvider implements ServerProvider {
       snapshotResource: {
         name: snapshotName(id),
         labels: sizing,
+        storageLocations: [regionOfZone(zone)],
       },
     });
     await waitZonal(this.zoneOps, projectId, zone, snapResp);
@@ -857,6 +862,11 @@ function isNotFound(err: unknown): boolean {
  * may be in another. Worth retrying elsewhere (unlike quota, which is regional/
  * global and a different zone won't help).
  */
+/** "northamerica-northeast2-b" -> "northamerica-northeast2". */
+function regionOfZone(zone: string): string {
+  return zone.replace(/-[a-z]$/, '');
+}
+
 function isCapacityError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return /RESOURCE_POOL_EXHAUSTED|does not have enough resources|ZONE_RESOURCE_POOL_EXHAUSTED/i.test(msg);
