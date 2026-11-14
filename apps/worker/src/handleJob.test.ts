@@ -3,6 +3,7 @@ import { STATE_ICON } from '@onehost/core';
 import type { ServerSpec } from '@onehost/core';
 import type { Job } from '@onehost/jobs';
 import { InMemoryProvider } from '@onehost/testing';
+import { InMemoryLeaseStore } from '@onehost/state';
 import { handleJob, makeNotify, type DiscordMessage, type WorkerDeps } from './handler.ts';
 
 /**
@@ -209,5 +210,91 @@ describe('default notify routing', () => {
 
     expect(postWebhook).toHaveBeenCalledWith({ content: 'sweep result' });
     expect(editOriginal).not.toHaveBeenCalled();
+  });
+});
+
+describe('leased start/stop', () => {
+  function leasedDeps() {
+    const leases = new InMemoryLeaseStore();
+    const { deps, notify } = makeDeps(provider);
+    return { deps: { ...deps, leases }, notify, leases };
+  }
+  async function stoppedServer(id = 'mc') {
+    await provider.create(spec(id));
+    await provider.stop(id, { allowAlreadyStopped: true });
+  }
+
+  it('lets only one of two concurrent /starts touch the provider', async () => {
+    await stoppedServer();
+    const { deps, notify } = leasedDeps();
+    const realStart = provider.start.bind(provider);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const startSpy = vi.spyOn(provider, 'start').mockImplementation(async (id, opts) => {
+      await gate;
+      return realStart(id, opts);
+    });
+
+    const first = handleJob(deps, { kind: 'start', id: 'mc', interactionToken: 't1' }, { jobId: 'm1' });
+    await vi.waitFor(() => expect(startSpy).toHaveBeenCalledOnce());
+    await handleJob(deps, { kind: 'start', id: 'mc', interactionToken: 't2' }, { jobId: 'm2' });
+    release();
+    await first;
+
+    expect(startSpy).toHaveBeenCalledOnce();
+    const replies = notify.mock.calls.map(([job, msg]) => [job.interactionToken, msg]);
+    expect(replies[0]).toEqual(['t2', { content: "⏳ 'mc' is already starting — hang on." }]);
+    expect((replies[1]![1] as DiscordMessage).embeds?.[0]?.title).toContain('mc is up');
+  });
+
+  it('answers /start on a running server with "already running" + its address', async () => {
+    await provider.create(spec('mc'));
+    const { deps, notify } = leasedDeps();
+    const startSpy = vi.spyOn(provider, 'start');
+
+    await handleJob(deps, { kind: 'start', id: 'mc', interactionToken: 't' }, { jobId: 'm1' });
+
+    expect(startSpy).not.toHaveBeenCalled();
+    const [, msg] = notify.mock.calls[0]!;
+    expect(msg.content).toBe("ℹ️ 'mc' is already running.");
+    expect(msg.embeds?.[0]?.title).toContain('mc is up');
+  });
+
+  it('drops an idle stop for an already-stopped server without posting to the channel', async () => {
+    await stoppedServer();
+    const { deps, notify } = leasedDeps();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await handleJob(deps, { kind: 'stop', id: 'mc' }, { jobId: 'idle-1' });
+
+    expect(notify).not.toHaveBeenCalled();
+    log.mockRestore();
+  });
+
+  it('parks a failed stop in ERROR and tells the user how to reset', async () => {
+    await provider.create(spec('mc'));
+    provider.failOn('stop', new Error('snapshot quota exceeded'));
+    const { deps, notify, leases } = leasedDeps();
+
+    await handleJob(deps, { kind: 'stop', id: 'mc', interactionToken: 't' }, { jobId: 'm1' });
+
+    expect((await leases.get('mc'))?.state).toBe('ERROR');
+    const embed = notify.mock.calls[0]![1].embeds?.[0];
+    expect(embed?.title).toContain('mc failed');
+    expect(embed?.description).toContain('snapshot quota exceeded');
+    expect(embed?.description).toContain('pnpm cli reset mc');
+  });
+
+  it('a redelivered start whose first attempt finished just reports success', async () => {
+    await provider.create(spec('mc')); // RUNNING: the first attempt got it up, then the worker died
+    const { deps, notify, leases } = leasedDeps();
+    await leases.claim('mc', { kind: 'start', jobId: 'm1', now: Date.now() }, 'STOPPED');
+    const startSpy = vi.spyOn(provider, 'start');
+
+    await handleJob(deps, { kind: 'start', id: 'mc', interactionToken: 't' }, { jobId: 'm1' });
+
+    expect(startSpy).not.toHaveBeenCalled();
+    expect(notify.mock.calls[0]![1].embeds?.[0]?.title).toContain('mc is up');
+    expect((await leases.get('mc'))?.state).toBe('RUNNING');
   });
 });

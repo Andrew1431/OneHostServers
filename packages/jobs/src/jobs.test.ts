@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parsePushBody, type Job } from './index.ts';
+import { parsePushBody, parsePushEnvelope, type Job } from './index.ts';
 
 function envelope(job: Job): string {
   const data = Buffer.from(JSON.stringify(job)).toString('base64');
@@ -40,5 +40,24 @@ describe('parsePushBody', () => {
   it('throws when the decoded data is not valid JSON', () => {
     const data = Buffer.from('not json').toString('base64');
     expect(() => parsePushBody(JSON.stringify({ message: { data } }))).toThrow();
+  });
+});
+
+describe('parsePushEnvelope', () => {
+  const data = Buffer.from(JSON.stringify({ kind: 'stop', id: 'mc' })).toString('base64');
+
+  it('surfaces the Pub/Sub messageId (stable across redeliveries)', () => {
+    expect(parsePushEnvelope(JSON.stringify({ message: { data, messageId: '123' } }))).toEqual({
+      job: { kind: 'stop', id: 'mc' },
+      messageId: '123',
+    });
+  });
+
+  it('accepts the snake_case message_id alias', () => {
+    expect(parsePushEnvelope(JSON.stringify({ message: { data, message_id: '456' } })).messageId).toBe('456');
+  });
+
+  it('omits messageId when the envelope has none', () => {
+    expect(parsePushEnvelope(JSON.stringify({ message: { data } }))).toEqual({ job: { kind: 'stop', id: 'mc' } });
   });
 });

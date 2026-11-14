@@ -1,7 +1,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { GcpServerProvider, configFromEnv } from '@onehost/gcp';
 import { dnsProviderFromEnv } from '@onehost/dns';
-import { parsePushBody, type Job } from '@onehost/jobs';
+import { parsePushEnvelope, type Job } from '@onehost/jobs';
+import { leaseStoreFromEnv } from '@onehost/state';
 import { handleJob, makeNotify, type DiscordMessage, type WorkerDeps } from './handler.ts';
 
 export { handleJob, makeNotify } from './handler.ts';
@@ -15,9 +16,9 @@ export type { WorkerDeps, DiscordMessage, Embed } from './handler.ts';
  * within the Cloud Run request timeout (set it ≥ a slow start, ~600s).
  *
  * Source of truth is the cloud (the provider), not a database: `list` reads live
- * instances + snapshots directly, and start/stop just act and report. The
- * Firestore `@onehost/state` repo + the `nextState` guard get wired in when
- * persistence lands; until then there's nothing durable to desync.
+ * instances + snapshots directly. start/stop run under a per-server Firestore
+ * lease (`@onehost/state`) that serializes them — it records only in-flight
+ * intent, and re-reads the provider whenever no lease is held.
  *
  * The pure job→reply logic lives in `handler.ts` (testable with no config/HTTP
  * side effects); this module wires the real provider + notifier and the HTTP
@@ -91,10 +92,13 @@ async function postWebhook(message: DiscordMessage): Promise<void> {
 
 // undefined when no DUCKDNS_TOKEN is set — DNS is opt-in, jobs run as before.
 const dns = await dnsProviderFromEnv();
+// Firestore lease unless LEASE_STORE=none (see @onehost/state + STATE_IMPROVEMENTS.md).
+const leases = leaseStoreFromEnv();
 const deps: WorkerDeps = {
   provider: new GcpServerProvider(configFromEnv()),
   notify: makeNotify(editOriginal, postWebhook),
   ...(dns ? { dns } : {}),
+  ...(leases ? { leases } : {}),
 };
 
 const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -108,8 +112,9 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
   }
 
   let job: Job;
+  let messageId: string | undefined;
   try {
-    job = parsePushBody((await readBody(req)).toString('utf8'));
+    ({ job, messageId } = parsePushEnvelope((await readBody(req)).toString('utf8')));
   } catch (err) {
     console.error('bad push body:', err);
     res.writeHead(400).end('bad request');
@@ -117,9 +122,9 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
   }
 
   // Process before acking. handleJob reports its own errors to Discord, so we
-  // ack (204) either way to avoid a redelivery re-running the VM op (no
-  // idempotency keys yet — SHORTCUTS #5).
-  await handleJob(deps, job);
+  // ack (204) either way. A redelivery (crash mid-op) carries the same messageId,
+  // which the lease recognises as its own and resumes rather than double-running.
+  await handleJob(deps, job, messageId ? { jobId: messageId } : {});
   res.writeHead(204).end();
 });
 

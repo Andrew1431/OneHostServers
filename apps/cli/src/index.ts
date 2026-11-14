@@ -7,6 +7,8 @@ import { dnsProviderFromEnv, dnsFqdn, dnsDomainSuffix, dnsProviderName } from '@
 import { loadGcpConfig, writeConfig, envFilePath } from './config.ts';
 import { createInteractively, startInteractively } from './interactive.ts';
 import { runInit } from './init.ts';
+import { resetLease, withLeases } from './lease.ts';
+import { LeaseRefusedError, LeasedOperationError, leaseStoreFromEnv } from '@onehost/state';
 import {
   UsageError,
   parseFlags,
@@ -35,7 +37,9 @@ async function main(): Promise<void> {
   if (command === 'init') return runInit(); // before loadGcpConfig — writes the .env it would read
 
   const cfg = loadGcpConfig();
-  const provider = new GcpServerProvider(cfg);
+  // start/stop take the same per-server lease as the worker (see ./lease.ts).
+  const leases = leaseStoreFromEnv({ ...process.env, GCP_PROJECT_ID: cfg.projectId });
+  const provider = withLeases(new GcpServerProvider(cfg), leases);
 
   switch (command) {
     case 'create': {
@@ -105,6 +109,12 @@ async function main(): Promise<void> {
       for (const s of report.warned) {
         console.log(`⚠️  '${s.id}' up ${Math.floor(s.uptimeHours)}h (flagged)`);
       }
+      break;
+    }
+    case 'reset': {
+      if (!id) return fail('reset needs a server id');
+      if (!leases) return fail('leasing is off (LEASE_STORE=none) — nothing to reset');
+      console.log(await resetLease(provider, leases, id, rest.includes('--force')));
       break;
     }
     case 'status': {
@@ -283,6 +293,7 @@ function usage(): void {
       '              [--persist]                                      # disable idle self-teardown for this run',
       '              [-i|--interactive]                               # pick machine/disk override from a menu',
       '  stop <id>',
+      '  reset <id> [--force]                                         # clear ERROR / a stuck lease (re-reads live state)',
       '  status <id>',
       '  ports <id> [--port udp:15636-15637] [--port tcp:80,443]      # set open ports (CLI-only); ranges N-M and lists N,M ok; no --port clears them',
       '  dns <id> <subdomain> | --clear                               # set/remove the stable address on an existing server',
@@ -310,6 +321,10 @@ main().catch((err: unknown) => {
   // Bad user input surfaces as the same `✗ <message>` + exit(1) the parsers
   // produced before they were extracted to throw instead of exiting in place.
   if (err instanceof UsageError) return fail(err.message);
+  if (err instanceof LeaseRefusedError) return fail(err.message);
+  if (err instanceof LeasedOperationError && err.settled === 'ERROR') {
+    return fail(`${err.message}\n  parked in ERROR — check it, then run \`pnpm cli reset <id>\``);
+  }
   console.error(err instanceof Error ? err.message : err);
   process.exit(1);
 });

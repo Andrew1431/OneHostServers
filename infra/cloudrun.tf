@@ -53,6 +53,34 @@ resource "google_project_service" "pubsub" {
   disable_on_destroy = false
 }
 
+# --- Lease store (Firestore) ------------------------------------------------
+# One doc per server serializes start/stop (see STATE_IMPROVEMENTS.md): a second
+# job sees the live lease and replies "hang on" instead of racing on the same
+# disk. Native mode, default database — free tier at this scale. The default DB
+# can't be recreated for a while after deletion, so destroy abandons it.
+
+resource "google_project_service" "firestore" {
+  count              = local.control_plane ? 1 : 0
+  service            = "firestore.googleapis.com"
+  disable_on_destroy = false
+}
+
+resource "google_firestore_database" "default" {
+  count           = local.control_plane ? 1 : 0
+  name            = "(default)"
+  location_id     = var.region
+  type            = "FIRESTORE_NATIVE"
+  deletion_policy = "ABANDON"
+  depends_on      = [google_project_service.firestore]
+}
+
+resource "google_project_iam_member" "worker_firestore" {
+  count   = local.control_plane ? 1 : 0
+  project = var.project_id
+  role    = "roles/datastore.user"
+  member  = "serviceAccount:${google_service_account.worker[0].email}"
+}
+
 # --- Job topic --------------------------------------------------------------
 
 resource "google_pubsub_topic" "jobs" {
@@ -204,6 +232,8 @@ resource "google_cloud_run_v2_service" "worker" {
     google_project_service.run,
     google_secret_manager_secret_iam_member.worker_duckdns,
     google_secret_manager_secret_iam_member.worker_cloudflare,
+    google_firestore_database.default,
+    google_project_iam_member.worker_firestore,
   ]
 
   template {
@@ -327,7 +357,49 @@ resource "google_pubsub_subscription" "jobs_to_worker" {
     }
   }
 
+  # A poison job stops redelivering after 5 tries and parks on the dead-letter
+  # topic. Safe now that the lease makes a redelivered start/stop resume, not rerun.
+  dead_letter_policy {
+    dead_letter_topic     = google_pubsub_topic.jobs_dead[0].id
+    max_delivery_attempts = 5
+  }
+
   depends_on = [google_service_account_iam_member.pubsub_token_creator]
+}
+
+# --- Dead letters -------------------------------------------------------------
+# Pub/Sub's service agent forwards undeliverable jobs here; it needs publish on the
+# DLQ and subscribe on the source subscription. The pull subscription just keeps
+# them inspectable for a week (`gcloud pubsub subscriptions pull onehost-jobs-dead`).
+
+resource "google_pubsub_topic" "jobs_dead" {
+  count      = local.control_plane ? 1 : 0
+  name       = "onehost-jobs-dead"
+  depends_on = [google_project_service.pubsub]
+}
+
+resource "google_pubsub_subscription" "jobs_dead" {
+  count                      = local.control_plane ? 1 : 0
+  name                       = "onehost-jobs-dead"
+  topic                      = google_pubsub_topic.jobs_dead[0].name
+  message_retention_duration = "604800s"
+  expiration_policy {
+    ttl = "" # never expire for inactivity
+  }
+}
+
+resource "google_pubsub_topic_iam_member" "dead_letter_publish" {
+  count  = local.control_plane ? 1 : 0
+  topic  = google_pubsub_topic.jobs_dead[0].name
+  role   = "roles/pubsub.publisher"
+  member = "serviceAccount:service-${data.google_project.this.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
+resource "google_pubsub_subscription_iam_member" "dead_letter_subscribe" {
+  count        = local.control_plane ? 1 : 0
+  subscription = google_pubsub_subscription.jobs_to_worker[0].name
+  role         = "roles/pubsub.subscriber"
+  member       = "serviceAccount:service-${data.google_project.this.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
 }
 
 # --- Reconcile sweep: Cloud Scheduler -> topic -> worker --------------------

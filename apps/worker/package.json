@@ -14,7 +14,8 @@
     "@onehost/dns": "workspace:*",
     "@onehost/gcp": "workspace:*",
     "@onehost/jobs": "workspace:*",
-    "@onehost/provider-api": "workspace:*"
+    "@onehost/provider-api": "workspace:*",
+    "@onehost/state": "workspace:*"
   },
   "devDependencies": {
     "@onehost/testing": "workspace:*",

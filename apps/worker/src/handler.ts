@@ -4,6 +4,15 @@ import type { DnsProvider } from '@onehost/dns';
 import { dnsDomainSuffix } from '@onehost/dns';
 import { STATE_ICON, describeMachine, viewServer } from '@onehost/core';
 import type { Job } from '@onehost/jobs';
+import {
+  LeaseRefusedError,
+  LeasedOperationError,
+  runLeased,
+  type LeaseKind,
+  type LeaseRunContext,
+  type LeaseStore,
+} from '@onehost/state';
+import { randomUUID } from 'node:crypto';
 
 /**
  * Pure control-plane logic for the worker: turn a {@link Job} into provider calls
@@ -49,6 +58,17 @@ export interface WorkerDeps {
    * the VM op already succeeded, so we log and still report success.
    */
   dns?: DnsProvider;
+  /**
+   * Per-server lease (Firestore in prod). When set, start/stop claim it first so
+   * concurrent or redelivered jobs can't collide; a second job gets a "hang on"
+   * reply instead of racing. `undefined` = unleased (local dev, older tests).
+   */
+  leases?: LeaseStore;
+}
+
+/** Per-delivery metadata. `jobId` is the Pub/Sub messageId (stable on redelivery). */
+export interface JobMeta {
+  jobId?: string;
 }
 
 /**
@@ -71,31 +91,40 @@ export function makeNotify(
   };
 }
 
-export async function handleJob(deps: WorkerDeps, job: Job): Promise<void> {
+export async function handleJob(deps: WorkerDeps, job: Job, meta: JobMeta = {}): Promise<void> {
   try {
     switch (job.kind) {
       case 'start': {
-        const running = await deps.provider.start(job.id);
-        // Point the stable hostname at the fresh ephemeral IP. Best-effort: the box
-        // is up, so a DNS hiccup must not turn the reply into a failure.
-        if (deps.dns && running.dnsHost) {
-          await upsertDnsQuietly(deps.dns, running.dnsHost, running.address);
-        }
+        const proceeded = await leased(deps, job, meta, async (ctx) => {
+          // A redelivery whose first attempt already got the box up: just report.
+          if (ctx.resumed && ctx.observed === 'RUNNING') return;
+          const running = await deps.provider.start(job.id);
+          // Point the stable hostname at the fresh ephemeral IP. Best-effort: the
+          // box is up, so a DNS hiccup must not turn the reply into a failure.
+          if (deps.dns && running.dnsHost) {
+            await upsertDnsQuietly(deps.dns, running.dnsHost, running.address);
+          }
+        });
+        if (!proceeded) break;
         await deps.notify(job, { embeds: [await startedEmbed(deps, job.id)] });
         break;
       }
       case 'stop': {
-        // Read the remembered host *before* stop deletes the instance, so we can
-        // clear the record afterward (hygiene: a stale A record could point players
-        // at whoever GCP reassigns the freed IP to — epic #13).
-        const dnsHost = deps.dns
-          ? (await deps.provider.list()).find((s) => s.id === job.id)?.dnsHost
-          : undefined;
-        // allowAlreadyStopped: an idle self-teardown may race a manual /stop, and
-        // at-least-once Pub/Sub can redeliver a stop we already ran — both should
-        // read as success, not a scary "failed" reply (SHORTCUTS #6d).
-        await deps.provider.stop(job.id, { allowAlreadyStopped: true });
-        if (deps.dns && dnsHost) await removeDnsQuietly(deps.dns, dnsHost);
+        const proceeded = await leased(deps, job, meta, async (ctx) => {
+          if (ctx.resumed && ctx.observed === 'STOPPED') return;
+          // Read the remembered host *before* stop deletes the instance, so we can
+          // clear the record afterward (hygiene: a stale A record could point
+          // players at whoever GCP reassigns the freed IP to — epic #13).
+          const dnsHost = deps.dns
+            ? (await deps.provider.list()).find((s) => s.id === job.id)?.dnsHost
+            : undefined;
+          // allowAlreadyStopped: with leasing off, an idle self-teardown may race a
+          // manual /stop, and a redelivered stop may find the VM gone — both should
+          // read as success, not a scary "failed" reply (SHORTCUTS #6d).
+          await deps.provider.stop(job.id, { allowAlreadyStopped: true });
+          if (deps.dns && dnsHost) await removeDnsQuietly(deps.dns, dnsHost);
+        });
+        if (!proceeded) break;
         await deps.notify(job, {
           embeds: [
             {
@@ -128,15 +157,63 @@ export async function handleJob(deps: WorkerDeps, job: Job): Promise<void> {
   } catch (err) {
     const target =
       job.kind === 'list' ? 'servers' : job.kind === 'sweep' ? 'reconcile sweep' : job.id;
+    let description = err instanceof Error ? err.message : 'unknown error';
+    if (err instanceof LeasedOperationError && err.settled === 'ERROR') {
+      description += `\n\nParked in ERROR so it isn't retried blindly — check it, then run \`pnpm cli reset ${target}\`.`;
+    }
     await deps.notify(job, {
       embeds: [
         {
           title: `${STATE_ICON.ERROR} ${target} failed`,
-          description: err instanceof Error ? err.message : 'unknown error',
+          description,
           color: STATE_COLOR.ERROR,
         },
       ],
     });
+  }
+}
+
+/**
+ * Run a start/stop under the server's lease. Returns false when the lease refused
+ * it — after replying ("already starting — hang on", "already running", …), so
+ * the caller just skips its success reply. Op failures propagate to handleJob's
+ * error reply. Without a lease store the op simply runs.
+ */
+async function leased(
+  deps: WorkerDeps,
+  job: Job & { kind: LeaseKind; id: ServerId },
+  meta: JobMeta,
+  op: (ctx: LeaseRunContext) => Promise<void>,
+): Promise<boolean> {
+  if (!deps.leases) {
+    await op({ resumed: false, observed: 'STOPPED' });
+    return true;
+  }
+  try {
+    await runLeased(
+      {
+        store: deps.leases,
+        observe: async (id) => (await deps.provider.status(id)).state,
+      },
+      { id: job.id, kind: job.kind, jobId: meta.jobId ?? randomUUID() },
+      op,
+    );
+    return true;
+  } catch (err) {
+    if (!(err instanceof LeaseRefusedError)) throw err;
+    // Tokenless jobs (idle teardown) refused because the box is already
+    // stopped/stopping: nothing to tell the channel about.
+    if (!job.interactionToken) {
+      console.log(`lease refused ${job.kind} ${job.id}: ${err.message}`);
+      return false;
+    }
+    const alreadyUp =
+      job.kind === 'start' && err.result.outcome === 'invalid' && err.result.state === 'RUNNING';
+    await deps.notify(job, {
+      content: `${err.result.outcome === 'busy' ? '⏳' : 'ℹ️'} ${err.message}`,
+      ...(alreadyUp ? { embeds: [await startedEmbed(deps, job.id)] } : {}),
+    });
+    return false;
   }
 }
 

@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 /**
  * The control-plane hand-off seam. The Discord interactions endpoint must ACK
  * within 3 seconds, but starting/stopping a VM takes minutes — so it publishes a
@@ -28,6 +30,8 @@ export type Job =
 
 export interface JobPublisher {
   publish(job: Job): Promise<void>;
+  /** Optional: pay one-time setup (client load, credentials) ahead of the first publish. */
+  warm?(): Promise<void>;
 }
 
 /**
@@ -39,6 +43,7 @@ export interface JobPublisher {
 export class PubSubPublisher implements JobPublisher {
   // Lazily constructed so importing this module costs nothing until first use
   // (keeps the local HTTP path from pulling in the GCP client).
+  private client: Promise<import('@google-cloud/pubsub').PubSub> | undefined;
   private topic: import('@google-cloud/pubsub').Topic | undefined;
 
   constructor(
@@ -46,13 +51,30 @@ export class PubSubPublisher implements JobPublisher {
     private readonly projectId?: string,
   ) {}
 
+  private getClient(): Promise<import('@google-cloud/pubsub').PubSub> {
+    // Memoize the promise, not the result, so a warm() still in flight is shared
+    // by the first publish rather than racing it with a second import.
+    this.client ??= import('@google-cloud/pubsub')
+      .then(({ PubSub }) => new PubSub(this.projectId ? { projectId: this.projectId } : {}))
+      .catch((err: unknown) => {
+        this.client = undefined; // don't cache a failure; the next call retries
+        throw err;
+      });
+    return this.client;
+  }
+
   private async getTopic(): Promise<import('@google-cloud/pubsub').Topic> {
     if (this.topic === undefined) {
-      const { PubSub } = await import('@google-cloud/pubsub');
-      const client = new PubSub(this.projectId ? { projectId: this.projectId } : {});
-      this.topic = client.topic(this.topicName);
+      this.topic = (await this.getClient()).topic(this.topicName);
     }
     return this.topic;
+  }
+
+  /** Load the client and fetch an access token now, overlapping cold-start work. */
+  async warm(): Promise<void> {
+    const client = await this.getClient();
+    await this.getTopic();
+    await client.auth.getAccessToken();
   }
 
   async publish(job: Job): Promise<void> {
@@ -77,7 +99,8 @@ export class HttpPublisher implements JobPublisher {
     void fetch(this.workerUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ message: { data } }),
+      // A messageId like Pub/Sub's, so the worker's lease keys stay identical.
+      body: JSON.stringify({ message: { data, messageId: randomUUID() } }),
     }).catch((err: unknown) => {
       console.error('http job publish failed:', err);
     });
@@ -100,8 +123,20 @@ export function publisherFromEnv(): JobPublisher {
  * Push delivers `{ message: { data: <base64 JSON> }, subscription }`.
  */
 export function parsePushBody(raw: string): Job {
-  const body = JSON.parse(raw) as { message?: { data?: unknown } };
+  return parsePushEnvelope(raw).job;
+}
+
+/**
+ * Like {@link parsePushBody}, plus the envelope's `messageId` — stable across
+ * Pub/Sub redeliveries, which is what makes the worker's lease idempotent.
+ */
+export function parsePushEnvelope(raw: string): { job: Job; messageId?: string } {
+  const body = JSON.parse(raw) as {
+    message?: { data?: unknown; messageId?: unknown; message_id?: unknown };
+  };
   const data = body.message?.data;
   if (typeof data !== 'string') throw new Error('push body missing message.data');
-  return JSON.parse(Buffer.from(data, 'base64').toString('utf8')) as Job;
+  const job = JSON.parse(Buffer.from(data, 'base64').toString('utf8')) as Job;
+  const id = body.message?.messageId ?? body.message?.message_id;
+  return typeof id === 'string' && id ? { job, messageId: id } : { job };
 }

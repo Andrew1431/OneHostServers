@@ -25,6 +25,9 @@ const PORT = Number(process.env.PORT ?? 8080);
 const POLICY = policyFromEnv();
 
 const publisher = publisherFromEnv();
+// Not awaited: runs alongside startup so the first command's publish finds the
+// client loaded. A failure here is harmless — publish() retries the setup.
+publisher.warm?.().catch((err: unknown) => console.error('pubsub warm-up failed:', err));
 
 const InteractionType = { PING: 1, APPLICATION_COMMAND: 2 } as const;
 const InteractionResponseType = {
